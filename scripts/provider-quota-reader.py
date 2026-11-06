@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 import urllib.request
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 try:
     import fcntl
 except ImportError:
@@ -43,8 +43,10 @@ def timestamp(value):
 
 def source_for(model):
     if not isinstance(model,str) or not MODEL.fullmatch(model):return None
-    if model.startswith('gpt-'):return 'paw'
     if model.startswith('gemini-'):return 'antigravity'
+    if re.fullmatch(r'(?:claude-(?:opus|sonnet)-(?:5-5-(?:low|medium|high)|4-6(?:-thinking)?)|gpt-oss-120b-medium)',model):return 'antigravity'
+    if model.startswith('gpt-oss-'):return None
+    if model.startswith('gpt-'):return 'paw'
     if model.startswith('deepseek-'):return 'workbuddy-cn'
     return None
 
@@ -61,17 +63,26 @@ def parse_paw(body):
         'periods':periods,'expiresAt':timestamp(subscription.get('expires_at')),
         'walletRemaining':number(body.get('remaining'))if not subscription else None}
 
+def ag_group(label,bucket_id=''):
+    label=str(label).lower();bucket_id=str(bucket_id).lower()
+    if bucket_id.startswith('gemini-argon-') or 'argon' in label:return 'argon'
+    if bucket_id.startswith('3p-') or ('claude' in label and 'gpt' in label):return 'third-party'
+    if bucket_id.startswith('gemini-') or 'gemini' in label:return 'gemini'
+    return None
+
+
 def parse_ag(body):
     windows=[]
     for group in body.get('groups',[])if isinstance(body,dict)else[]:
         label=group.get('displayName')or group.get('display_name')or''
-        if 'gemini' not in label.lower():continue
         for bucket in group.get('buckets',[]):
+            quota_group=ag_group(label,bucket.get('bucketId',''))
+            if not quota_group:continue
             fraction=number(bucket.get('remainingFraction',bucket.get('remaining_fraction')))
             if fraction is None or not 0<=fraction<=1:continue
             period=bucket.get('window')
             if period not in ('5h','weekly'):continue
-            windows.append({'period':period,'remainingPercent':fraction*100,
+            windows.append({'group':quota_group,'period':period,'remainingPercent':fraction*100,
                 'resetsAt':timestamp(bucket.get('resetTime')or bucket.get('reset_time')),
                 'observedAt':int(time.time()*1000),'stale':False})
     if not windows:raise QuotaError('antigravity_quota_format_unavailable')
@@ -180,8 +191,13 @@ def read_ag():
         if (entry.get('provider')or entry.get('type'))=='antigravity'and not entry.get('disabled')]
     entries.sort(key=lambda entry:str(entry.get('auth_index')or entry.get('authIndex')or''))
     if not entries:raise QuotaError('antigravity_accounts_unavailable')
+    models_by_index={}
     def one(pair):
         index,entry=pair
+        registered=management('auth-files/models?name='+quote(str(entry.get('name','')),safe=''))
+        models=[item['id'] for item in registered.get('models',[]) if isinstance(item,dict)
+            and isinstance(item.get('id'),str) and MODEL.fullmatch(item['id'])]
+        models_by_index[index]=models
         result=management('api-call',{'authIndex':entry.get('auth_index')or entry.get('authIndex'),
             'method':'POST','url':'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
             'header':{'Authorization':'Bearer $TOKEN$','Content-Type':'application/json','User-Agent':'antigravity/hub/2.23.0 darwin/arm64'},
@@ -190,7 +206,8 @@ def read_ag():
         if status!=200:raise QuotaError('antigravity_http_'+str(status))
         body=result.get('body')or{}
         if isinstance(body,str):body=json.loads(body)
-        return {'label':'AG '+str(index+1),'windows':parse_ag(body),'stale':False}
+        windows=parse_ag(body)
+        return {'label':'AG '+str(index+1),'models':models,'windows':windows,'stale':False}
     accounts=[];failed=[]
     with concurrent.futures.ThreadPoolExecutor(max_workers=3)as executor:
         futures={executor.submit(one,pair):pair[0]for pair in enumerate(entries)}
@@ -204,16 +221,19 @@ def read_ag():
             windows=[]
             for item in snapshots.get(str(index),[]):
                 window=item.get('provider_window_id','')
-                if not window.startswith('gemini-models:')or item.get('availability')=='inactive':continue
+                if item.get('availability')=='inactive' or ':'not in window:continue
+                window_label,bucket_id=window.split(':',1)
+                quota_group=ag_group(window_label,bucket_id)
+                if not quota_group or not bucket_id.endswith(('-5h','-weekly')):continue
                 remaining=number(item.get('remaining_percent'))
                 if remaining is None:continue
                 cycle=item.get('current_cycle')or{}
-                windows.append({'period':'5h'if '5h'in window else'weekly','remainingPercent':remaining,
+                windows.append({'group':quota_group,'period':'5h'if bucket_id.endswith('-5h')else'weekly','remainingPercent':remaining,
                     'resetsAt':cycle.get('scheduled_end_ms'),'observedAt':item.get('observed_at_ms'),'stale':True})
-            accounts.append({'label':'AG '+str(index+1),'windows':windows,'stale':True})
+            accounts.append({'label':'AG '+str(index+1),'models':models_by_index.get(index,[]),'windows':windows,'stale':True})
     accounts.sort(key=lambda entry:entry['label'])
     if not any(entry['windows']for entry in accounts):raise QuotaError('antigravity_quota_unavailable')
-    return {'accounts':accounts,'accountCount':len(entries)},bool(failed),(['部分账号使用旧快照']if failed else[])
+    return {'quotaSchemaVersion':2,'accounts':accounts,'accountCount':len(entries)},bool(failed),(['部分账号使用旧快照']if failed else[])
 
 def read_source(source):
     started=int(time.time()*1000)
@@ -233,6 +253,7 @@ def main():
     old=None
     try:old=json.loads(path.read_text())
     except (OSError,ValueError):pass
+    if source=='antigravity' and (old or{}).get('data',{}).get('quotaSchemaVersion')!=2:old=None
     age=(time.time()*1000-(old or{}).get('queriedAt',0))/1000
     if old and age<(15 if request.get('force')else TTL):
         print(json.dumps(old,ensure_ascii=False,allow_nan=False));return

@@ -2,9 +2,12 @@
 param(
   [ValidateRange(1024, 65535)]
   [int]$Port = 9335,
+  [ValidateSet('NativeCompanion', 'LegacyCdp')]
+  [string]$Mode = 'NativeCompanion',
   [string]$InstallRoot = (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\CodexUsageMonitor'),
   [string]$ShortcutDirectory = [Environment]::GetFolderPath('Desktop'),
   [switch]$SkipShortcut,
+  [switch]$SkipStartup,
   [switch]$NonInteractive
 )
 
@@ -96,14 +99,30 @@ foreach ($relative in $files) {
   Copy-Item -LiteralPath $source -Destination $destination -Force
 }
 
-if (-not $SkipShortcut) {
-  $launcherInstaller = Join-Path $installDirectory 'scripts\install-monitor-launcher.ps1'
-  & $launcherInstaller -Port $Port -DestinationDirectory $ShortcutDirectory
+$nativeBuildScript = Join-Path $installDirectory 'native-overlay\build.ps1'
+if (Test-Path -LiteralPath $nativeBuildScript -PathType Leaf) {
+  & $nativeBuildScript
 }
 
-Write-Host "Codex Usage Monitor $version installed to: $installDirectory"
+if (-not $SkipShortcut) {
+  if ($Mode -eq 'LegacyCdp') {
+    $launcherInstaller = Join-Path $installDirectory 'scripts\install-monitor-launcher.ps1'
+    & $launcherInstaller -Port $Port -DestinationDirectory $ShortcutDirectory
+  } else {
+    $startCompanion = Join-Path $installDirectory 'scripts\start-native-companion.ps1'
+    if ($SkipStartup) {
+      & $startCompanion -Replace | Out-Null
+    } else {
+      & $startCompanion -Replace -RegisterStartup | Out-Null
+    }
+  }
+}
+
+Write-Host "Codex Usage Monitor $version ($Mode) installed to: $installDirectory"
 if ($SkipShortcut) {
   Write-Host 'Shortcut creation was skipped.'
-} else {
+} elseif ($Mode -eq 'LegacyCdp') {
   Write-Host 'Exit the current Codex session normally, then start Codex from the desktop shortcut: Codex Usage Monitor'
+} else {
+  Write-Host 'Native companion overlay is active. Launch Codex directly from its native icon; no restart or CDP flag is needed.'
 }

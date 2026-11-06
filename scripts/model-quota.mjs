@@ -3,7 +3,10 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 
 export const REFRESH_QUOTA_BINDING='__codexUsageMonitorRefreshQuota';
-export const sourceForModel=model=>typeof model!=='string'?null:model.startsWith('deepseek-')?'workbuddy-cn':model.startsWith('gemini-')?'antigravity':model.startsWith('gpt-')?'paw':null;
+export const antigravityGroupForModel=model=>typeof model!=='string'?null:
+  model.startsWith('gemini-4-argon-')?'argon':model.startsWith('gemini-')?'gemini':
+  /^(?:claude-(?:opus|sonnet)-(?:5-5-(?:low|medium|high)|4-6(?:-thinking)?)|gpt-oss-120b-medium)$/.test(model)?'third-party':null;
+export const sourceForModel=model=>typeof model!=='string'?null:antigravityGroupForModel(model)?'antigravity':model.startsWith('deepseek-')?'workbuddy-cn':model.startsWith('gpt-oss-')?null:model.startsWith('gpt-')?'paw':null;
 export function validQuotaEndpoint(config){
   return config?.enabled===true&&typeof config.sshHost==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(config.sshHost)
     &&typeof config.remoteReader==='string'&&/^\/(?:[a-zA-Z0-9_-][a-zA-Z0-9._-]*\/)*[a-zA-Z0-9_-][a-zA-Z0-9._-]*\.py$/.test(config.remoteReader);
@@ -26,7 +29,7 @@ export function quotaSource(model,snapshot,loading=false,error=null){
   const source=sourceForModel(model),data=snapshot?.data||{},metrics=[];
   const add=(id,label,value,detail='',primary=false)=>metrics.push({id,label,value,display:`${label} ${value}`,detail,defaultVisible:primary});
   let remaining='读取中',label='个人模型额度',detail='';
-  if(!source){remaining='未识别';error='请选择支持的 GPT、Gemini 或 DeepSeek 模型。';}
+  if(!source){remaining='未识别';error='当前模型没有配置个人额度来源。';}
   else if(snapshot?.source!==source){snapshot=null;}
   if(snapshot&&source==='paw'){
     label='个人额度 · Paw';
@@ -46,15 +49,21 @@ export function quotaSource(model,snapshot,loading=false,error=null){
     add('balanceTime','积分更新时间',date(data.observedAt),'余额接口的原始更新时间，非本次读取时间。');
   }else if(snapshot&&source==='antigravity'){
     label='个人额度 · Antigravity';
-    const accounts=Array.isArray(data.accounts)?data.accounts:[];
+    const group=antigravityGroupForModel(model);
+    // Old Gemini-only snapshots cannot establish eligibility for newly gated models.
+    const allAccounts=Array.isArray(data.accounts)?data.accounts:[];
+    const accounts=allAccounts.filter(account=>Array.isArray(account.models)?account.models.includes(model):group==='gemini')
+      .map(account=>({...account,windows:(account.windows||[]).filter(item=>(item.group||'gemini')===group)}));
     const windows=accounts.flatMap(account=>account.windows||[]).filter(item=>finite(item.remainingPercent));
     remaining=windows.length?`${Math.min(...windows.map(item=>item.remainingPercent)).toFixed(1)}%`:'未提供';
-    add('remaining','AG最低剩余',remaining,'已读账户中此模型额度组各周期的最低剩余比例，不是账号额度总和。',true);
+    const groupName={gemini:'Gemini',argon:'Argon','third-party':'Claude/GPT'}[group];
+    add('remaining',`${groupName}剩余`,remaining,'具备当前模型权限的已读账户中，对应额度组各周期的最低剩余比例，不是账号额度总和或本次请求实际路由账号。',true);
+    if(!windows.length)error=error||'尚无当前模型的可用额度数据。';
     for(const [index,account]of accounts.entries())for(const window of account.windows||[]){
       const period=window.period==='5h'?'5小时':'周';
-      add(`account${index}_${window.period}`,`${account.label} ${period}`,finite(window.remainingPercent)?`${window.remainingPercent.toFixed(1)}%`:'未提供',`重置 ${date(window.resetsAt)}；查询 ${date(window.observedAt)}${window.stale?'，旧快照':''}`);
+      add(`account${index}_${window.group||group}_${window.period}`,`${account.label} ${period}`,finite(window.remainingPercent)?`${window.remainingPercent.toFixed(1)}%`:'未提供',`重置 ${date(window.resetsAt)}；查询 ${date(window.observedAt)}${window.stale?'，旧快照':''}`);
     }
-    add('coverage','额度数据账号数',`${accounts.filter(item=>(item.windows||[]).length).length} / ${data.accountCount||accounts.length}`);
+    add('coverage','当前模型额度账号数',`${accounts.filter(item=>(item.windows||[]).length).length} / ${data.accountCount||allAccounts.length}`,'只统计具备该模型权限且有对应额度数据的账号。');
   }
   if(!metrics.length)add('remaining',source==='workbuddy-cn'?'CN积分':source==='paw'?'Paw剩余':'当前额度',error?'暂不可用':remaining,error||'正在读取当前模型对应的个人额度。',true);
   if(model)add('model','当前模型',model);

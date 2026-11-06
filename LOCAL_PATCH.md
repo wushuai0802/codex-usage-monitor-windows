@@ -37,3 +37,14 @@ The launcher uses the Windows package activation API directly, including warm
 launches, with an activation mutex acquired first. It never routes a same-AUMID
 custom shortcut through AppsFolder. This avoids self-invocation loops while
 preserving the existing Codex process and monitor.
+
+## 3.4.0 Native Companion Overlay & Antigravity Model Buckets
+
+- Default installation mode (`NativeCompanion`) compiles `native-overlay/NativeOverlay.cs`
+  locally via built-in `.NET Framework` `csc.exe` (no prebuilt `.exe` binaries in Git or
+  Release archives). It attaches an owned, non-activating WPF DirectWrite transparent strip
+  and rounded shadow popover directly above the Codex composer toolbar without CDP or DOM
+  injection, reads active threads from `\\.\pipe\codex-ipc`, and hibernates backend worker
+  processes automatically when Codex is closed.
+- Model quota grouping extends Antigravity snapshots with explicit `gemini`, `argon`, and
+  `third-party` groups plus per-account model eligibility filtering.

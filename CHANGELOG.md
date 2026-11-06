@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.4.0 - 2026-11-06
+
+- **独立伴随浮层默认模式（免 CDP / 原生图标直开）**：新增基于 WPF DirectWrite 理想字距与逐像素全透明合成的原生伴随浮层（`native-overlay/`），通过 `\\.\pipe\codex-ipc` 跟踪当前活跃会话、通过 Windows UI Automation 与 `SetWinEventHook` 定位输入框底部工具栏。无需 `--remote-debugging-port` 或自定义快捷方式，直接点击原生 Codex 图标启动及商店自动更新重启后均自动吸附。
+- **丝滑窗口跟随与按需随动休眠**：窗口拖拽/缩放/最小化及打开下拉菜单时 0ms 即时隐藏避让，停稳后 115ms 三次缓动淡入；Codex 启动时自动拉起采集后台，Codex 完全退出后自动回收 Node/Python 采集进程进入零开销待命；支持关闭当前会话浮层并在下次启动 Codex 时自动恢复。
+- **Antigravity 新额度桶与按账号模型权限过滤**：支持 `argon`（`gemini-4-argon-*`）与 `third-party`（Claude 5.5 / 4.6 及 GPT-OSS）额度组，按具备目标模型权限的账号过滤窗口余量。
+- 保留 `-Mode LegacyCdp` 兼容入口与全部原有本地采集、DPAPI 凭据保护及校验套件。
+
 ## 3.3.0 - 2026-10-27
 
 - 独立维护版本，基于原项目 v3.2.2；保留 MIT 许可证与来源记录。

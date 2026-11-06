@@ -2,15 +2,15 @@
 
 在 Windows Codex Desktop 的输入框内显示 tok/s、Token、缓存率和可选供应商额度。
 
-本仓库是基于 [JiaYang-BUAA/Codex-Desktop-Usage-Monitor-Windows](https://github.com/JiaYang-BUAA/Codex-Desktop-Usage-Monitor-Windows) v3.2.2（commit `1f32ee598cb56875075968a86e0795873688b5f6`）的维护版本，当前版本 **3.3.0**。保留 MIT 许可证和第三方来源记录，界面不再显示底部作者区。
+本仓库是基于 [JiaYang-BUAA/Codex-Desktop-Usage-Monitor-Windows](https://github.com/JiaYang-BUAA/Codex-Desktop-Usage-Monitor-Windows) v3.2.2（commit `1f32ee598cb56875075968a86e0795873688b5f6`）的维护版本，当前版本 **3.4.0**。保留 MIT 许可证和第三方来源记录，界面不再显示底部作者区。
 
 ## 功能
 
-- 在现有输入框内显示纯数字 `tok/s`，沿用原生字体和颜色；点击展开详情。
+- **免 CDP 独立伴随浮层（默认模式）**：无需专用启动快捷方式或调试端口，直接通过 Windows 原生 Codex 图标启动；Codex 自动升级重启后自动重新吸附，无需退出重开。
+- **丝滑窗口跟随与按需随动休眠**：采用 WPF DirectWrite 理想字距与逐像素全透明合成，窗口拖动/缩放及展开模型菜单时 0ms 避让隐藏、停稳后缓动淡入；Codex 启动时自动拉起采集后台，退出后自动回收后台进程。
+- 在输入框工具栏显示纯数字 `tok/s`，自动避让右侧上下文圆环；点击展开多列详情与勾选开关且不抢输入焦点。
 - 保留 Token、缓存命中率、官方订阅及原项目的 API Account / API Key 配置能力。
-- 独立采样，按窗口识别会话；修复仅选 tok/s 时的闪烁和上下文圆环重叠。
-- 可选按当前模型切换 Paw、Antigravity、WorkBuddy **CN** 额度，LV 不计入。
-- 启动器可唤起已在后台运行的 Codex；使用 Windows 原生包激活和重复启动保护，避免同应用 ID 快捷方式递归。
+- 可选按当前模型切换 Paw、Antigravity（含 Gemini / Argon / Claude 分组与账号权限过滤）、WorkBuddy **CN** 额度，LV 不计入。
 - 移除 Agent Speed 的运行依赖，不需要它的进程、流量服务或历史数据库。
 
 tok/s 来自本地 Codex usage 事件。生成中可能使用估算或暂存读数，含义在悬停提示中说明；首次无采样时以 `0.0 tok/s` 占位。它不是网络流逐 Token 的测速结果。
@@ -22,26 +22,25 @@ tok/s 来自本地 Codex usage 事件。生成中可能使用估算或暂存读�
 - Python 3.10+，用于标准库 JSONL / SQLite 只读采集。
 - 仅可选 NAS 额度读取器额外需要 Linux、PyYAML 和已有 SSH / 服务读取权限。
 
-这是非官方的运行时界面扩展，不是 OpenAI 官方插件。它通过 **127.0.0.1** 上的 CDP 附加界面，不修改 WindowsApps 或 app.asar，不关闭 workspace trust，也不强制结束 Codex。
+这是非官方的伴随界面工具，不是 OpenAI 官方插件。默认伴随浮层模式通过只读 `\\.\pipe\codex-ipc` 与 Windows UI Automation 跟随窗口（兼容旧版 `-Mode LegacyCdp` 仍仅绑定本机 **127.0.0.1**），不修改 WindowsApps 或 app.asar，不关闭 workspace trust，也不强制结束 Codex。
 
 ## 安装
 
 在 [Releases](https://github.com/wushuai0802/codex-usage-monitor-windows/releases) 下载 ZIP 与同名 SHA-256 文件，核对后解压：
 
 ```powershell
-Get-FileHash .\codex-usage-monitor-windows-3.3.0.zip -Algorithm SHA256
+Get-FileHash .\codex-usage-monitor-windows-3.4.0.zip -Algorithm SHA256
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-默认安装到当前用户的版本目录，生成隐藏启动器快捷方式。也可指定软件目录：
+默认以 `NativeCompanion` 模式安装到当前用户的版本目录，使用系统内置 `.NET Framework` 本地编译 `CodexUsageOverlay.exe` 并注册登录随动待命入口，安装后无需重启正在运行的 Codex，以后直接点击原生 Codex 图标即可。也可指定安装目录或卸载：
 
 ```powershell
 .\install.ps1 -InstallRoot "D:\Apps\CodexUsageMonitor"
+.\uninstall.ps1
 ```
 
-如果 Codex 已在运行且没有开放 CDP，安装器不会结束它。在方便时正常退出一次，再从安装器生成的启动器打开。随后点击同一入口可唤起后台实例。可以将这个入口固定到任务栏或 Dock；已有图标需要指向此启动器，直接启动原生包不会自动补上 CDP 参数。
-
-不要把 CDP 端口开放到局域网。保留安装器发现的真实应用路径，勿照抄其他电脑的 WindowsApps 版本目录。
+如需使用旧版 CDP 注入模式，可显式传入 `.\install.ps1 -Mode LegacyCdp`（不要把 CDP 端口开放到局域网）。保留安装器发现的真实应用路径，勿照抄其他电脑的 WindowsApps 版本目录。
 
 ## 配置
 

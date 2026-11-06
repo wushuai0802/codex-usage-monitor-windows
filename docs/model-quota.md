@@ -6,9 +6,16 @@
 
 | 模型前缀 | 额度数据 | 口径 |
 | --- | --- | --- |
-| `gpt-` | Paw / Sub2API | 优先使用周订阅剩余 USD |
-| `gemini-` | CPAM 中的 Antigravity | Gemini 5 小时/周窗口；折叠值为各已读账号/周期的最低剩余比例，不能相加 |
+| `gpt-`（排除 GPT-OSS） | Paw / Sub2API | 优先使用周订阅剩余 USD |
+| `gemini-`（排除 Argon） | CPAM 中的 Antigravity | Gemini 5 小时/周窗口 |
+| `gemini-4-argon-*` | Antigravity Argon 额度组 | 独立 Argon 周窗口，不混入普通 Gemini 额度 |
+| Claude Opus/Sonnet 5.5、4.6，以及 `gpt-oss-120b-medium` | Antigravity Claude/GPT 额度组 | 共享 5 小时/周窗口，不使用 Paw 额度 |
 | `deepseek-` | WorkBuddy CN | CN 积分余额；不查询、不统计 LV |
+
+Antigravity 按 CPA 每个账号实际注册的模型过滤账号，再选择对应额度组。
+折叠值为这些账号/周期的最低剩余比例，不能相加，也不表示本次请求实际命中的账号。
+旧版缓存缺少模型权限或额度分组时，不会用 Gemini 数值填充 Argon/Claude。
+没有独立 Argon 桶的其他订阅类型暂显示无对应额度数据，不猜测其与 Gemini 的共享关系。
 
 ## Windows 配置
 
@@ -64,7 +71,7 @@ Antigravity 的 project 必须来自原认证元数据；缺失时使用带旧�
 ## 刷新与限制
 
 - 每个供应商约 60 秒读取一次，服务端有锁、原子缓存写入和强制读取冷却。
-- 失败保留旧数值并标明状态；切换供应商不会沿用上一家的额度。
+- 失败保留旧数值并标明状态；切换供应商或 Antigravity 模型组不会沿用另一组额度。
 - CN 接口读取已有余额缓存，界面保留余额本身的更新时间；读取成功不代表刚刷新了上游积分。
 - 不调用生成、签到、账号刷新或重新登录接口；不会改变 CPA 路由与账号。
 - SSH 不可达、格式变化或模型不匹配时，tok/s 和原有 Token 功能仍独立工作。

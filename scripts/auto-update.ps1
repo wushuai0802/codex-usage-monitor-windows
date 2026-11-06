@@ -89,7 +89,7 @@ try {
   $stream.Dispose(); $stream = $null
   if ((Get-Content -LiteralPath (Join-Path $packageRoot 'VERSION') -Raw).Trim() -ne $Version) { throw 'Update package VERSION does not match the release tag.' }
   if ($ValidateOnly) { Write-Host "Validated update package $Version."; return }
-  & (Join-Path $packageRoot 'install.ps1') -Port $Port -InstallRoot $InstallRoot -ShortcutDirectory $ShortcutDirectory -NonInteractive
+  & (Join-Path $packageRoot 'install.ps1') -Mode LegacyCdp -Port $Port -InstallRoot $InstallRoot -ShortcutDirectory $ShortcutDirectory -NonInteractive
   $installedRoot = Join-Path $InstallRoot $Version
   if (-not (Test-Path -LiteralPath (Join-Path $installedRoot 'scripts\start-monitor.ps1') -PathType Leaf)) { throw 'Installed update could not be verified.' }
   Write-UpdateState 'installed'

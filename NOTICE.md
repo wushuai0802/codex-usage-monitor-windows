@@ -8,6 +8,14 @@ Parts of the local rate collector derive from Agent Speed v1.4.1 timing and
 deduplication code. Its MIT notice is retained in AGENT_SPEED_LICENSE.txt:
 https://github.com/zoefix/agent-speed
 
+The independent WPF DirectWrite companion overlay adapts window-offset caching
+and drag-hide settle ideas from wushuai0802/claude-usage-monitor-windows (MIT):
+https://github.com/wushuai0802/claude-usage-monitor-windows
+
+Read-only Codex named-pipe (`\\.\pipe\codex-ipc`) active-thread framing references
+soleillevant0125/codex-token-overlay (MIT):
+https://github.com/soleillevant0125/codex-token-overlay
+
 Codex Usage Monitor for Windows is derivative software based on runtime-injection ideas from:
 
 - Fei-Away/Codex-Dream-Skin: https://github.com/Fei-Away/Codex-Dream-Skin

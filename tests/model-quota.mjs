@@ -16,6 +16,10 @@ for(const invalid of [
 assert.equal(sourceForModel('deepseek-v4.1-flash'),'workbuddy-cn');
 assert.equal(sourceForModel('deepseek-v4-pro'),'workbuddy-cn');
 assert.equal(sourceForModel('gemini-3.8-flash-high'),'antigravity');
+assert.equal(sourceForModel('claude-opus-5-5-high'),'antigravity');
+assert.equal(sourceForModel('claude-sonnet-5-5-high'),'antigravity');
+assert.equal(sourceForModel('gpt-oss-120b-medium'),'antigravity');
+assert.equal(sourceForModel('gpt-oss-unknown'),null);
 const catalog=[{slug:'gpt-6.1-sol',display_name:'GPT-6.1-Sol'},{slug:'deepseek-v4-pro',display_name:'DeepSeek V4 Pro'}];
 assert.equal(resolveModel(['6.1 Sol'],catalog),'gpt-6.1-sol');
 assert.equal(resolveModel(['DeepSeek V4 Pro'],catalog),'deepseek-v4-pro');
@@ -30,6 +34,27 @@ client.config={};await client.refresh('gpt-6.1-sol');
 assert.equal(client.get('gpt-6.1-sol').metrics[0].value,'510 USD');
 assert.equal(client.get('deepseek-v4-pro').metrics[0].value,'读取中');
 await client.refresh('deepseek-v4-pro');assert.equal(client.get('deepseek-v4-pro').metrics[0].value,'99 credit');client.stop();
+const gemini='gemini-3.8-flash-high',argon='gemini-4-argon-high',opus='claude-opus-5-5-high',sonnet='claude-sonnet-5-5-high';
+const ag={version:1,source:'antigravity',observedAt:Date.now(),data:{quotaSchemaVersion:2,accountCount:3,accounts:[
+  {label:'AG 1',models:[gemini,'claude-opus-4-6-thinking'],windows:[{group:'gemini',period:'weekly',remainingPercent:1},{group:'third-party',period:'weekly',remainingPercent:2}]},
+  {label:'AG 2',models:[gemini,argon,opus,sonnet],windows:[{group:'gemini',period:'weekly',remainingPercent:75},{group:'argon',period:'weekly',remainingPercent:88},{group:'third-party',period:'weekly',remainingPercent:60}]},
+  {label:'AG 3',models:[gemini,argon,opus,sonnet],windows:[{group:'gemini',period:'weekly',remainingPercent:70},{group:'argon',period:'weekly',remainingPercent:90},{group:'third-party',period:'weekly',remainingPercent:80}]}
+]}};
+assert.equal(quotaSource(gemini,ag).metrics[0].value,'1.0%');
+assert.equal(quotaSource(argon,ag).metrics[0].value,'88.0%');
+assert.equal(quotaSource(opus,ag).metrics[0].value,'60.0%');
+assert.equal(quotaSource(sonnet,ag).metrics[0].value,'60.0%');
+assert.equal(quotaSource(argon,ag).metrics.find(m=>m.id==='coverage').value,'2 / 3');
+const oldAg={version:1,source:'antigravity',data:{accounts:[{label:'AG 1',windows:[{period:'weekly',remainingPercent:99}]}]}};
+assert.equal(quotaSource(argon,oldAg).metrics[0].value,'未提供');
+assert.equal(quotaSource(opus,oldAg).metrics[0].value,'未提供');
+assert.equal(quotaSource(gemini,oldAg).metrics[0].value,'99.0%');
+let agReads=0;
+const agClient=new ModelQuotaClient({runner:async()=>{agReads++;return ag;}});agClient.config={};
+for(const model of [gemini,argon,opus,sonnet])await agClient.refresh(model);
+assert.equal(agReads,1,'Models share one AG fetch, but must select different quota groups');
+assert.equal(agClient.get(argon).metrics[0].value,'88.0%');
+assert.equal(agClient.get(opus).metrics[0].value,'60.0%');agClient.stop();
 const parsed=spawnSync(process.env.CODEX_USAGE_RATE_PYTHON||'python.exe',['-B',fileURLToPath(new URL('./provider-quota-reader.py',import.meta.url))],{encoding:'utf8',windowsHide:true,env:{...process.env,PYTHONUTF8:'1'}});
 assert.equal(parsed.status,0,parsed.stderr||parsed.error?.message);
 

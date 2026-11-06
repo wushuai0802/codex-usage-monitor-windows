@@ -42,6 +42,7 @@ foreach ($match in [regex]::Matches($lockText, '"resolved"\s*:\s*"(https://[^"]+
 
 $powerShellFiles = Get-ChildItem -LiteralPath (Join-Path $root 'scripts') -Filter '*.ps1' -File
 $powerShellFiles += Get-ChildItem -LiteralPath (Join-Path $root 'tests') -Filter '*.ps1' -File
+$powerShellFiles += Get-ChildItem -LiteralPath (Join-Path $root 'native-overlay') -Filter '*.ps1' -File
 $powerShellFiles += Get-ChildItem -LiteralPath $root -Filter '*.ps1' -File
 foreach ($file in $powerShellFiles) {
   $bytes = [IO.File]::ReadAllBytes($file.FullName)
@@ -56,7 +57,7 @@ foreach ($file in $powerShellFiles) {
 
 $javascriptFiles = @(
   'assets\usage-constants.js', 'assets\usage-i18n.js', 'assets\usage-placement.js',
-  'assets\usage-inject.js', 'assets\usage-history.js', 'scripts\injector.mjs', 'scripts\current-thread.mjs', 'scripts\usage-client.mjs', 'scripts\usage\scheduling.mjs', 'scripts\usage\history.mjs', 'tests\usage-history.mjs', 'scripts\validate-provider.mjs',
+  'assets\usage-inject.js', 'assets\usage-history.js', 'native-overlay\ipc-route.mjs', 'native-overlay\companion-backend.mjs', 'scripts\injector.mjs', 'scripts\current-thread.mjs', 'scripts\usage-client.mjs', 'scripts\usage\scheduling.mjs', 'scripts\usage\history.mjs', 'tests\usage-history.mjs', 'tests\native-companion.mjs', 'scripts\validate-provider.mjs',
   'scripts\ui-settings.mjs', 'scripts\auto-updater.mjs', 'scripts\auto-update-worker.mjs', 'scripts\auto-resume.mjs', 'scripts\desktop-request.mjs', 'tests\current-thread.mjs', 'tests\usage-client.mjs', 'tests\usage-monitor-lifecycle.mjs', 'tests\ui-settings.mjs', 'tests\auto-updater.mjs', 'tests\auto-update-worker.mjs', 'tests\auto-resume.mjs', 'tests\desktop-request.mjs', 'tests\auto-resume-integration.mjs'
 )
 foreach ($relative in $javascriptFiles) {
@@ -72,6 +73,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Backend heartbeat verification tests failed.' 
 if ($LASTEXITCODE -ne 0) { throw 'Live rate and read-only bridge tests failed.' }
 & $node (Join-Path $root 'tests\model-quota.mjs')
 if ($LASTEXITCODE -ne 0) { throw 'Model-aware quota tests failed.' }
+& $node (Join-Path $root 'tests\native-companion.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'Native companion IPC route tests failed.' }
 & $pwsh -NoLogo -NoProfile -File (Join-Path $root 'tests\startup-wait.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Slow startup recovery tests failed.' }
 & $pwsh -NoLogo -NoProfile -File (Join-Path $root 'tests\launcher-reentry.ps1')
@@ -357,10 +360,10 @@ if (-not $SkipPackageTest) {
     foreach ($item in $manifest) { $expectedItems += ([string]$item).Replace('/', '\') }
     $expected = @($expectedItems | Sort-Object)
     if (Compare-Object $expected $actual) { throw 'Release archive content differs from the allowlist.' }
-    $text = ($actual | Where-Object { $_ -match '\.(?:js|mjs|json|md|ps1|txt)$' } | ForEach-Object {
+    $text = ($actual | Where-Object { $_ -match '\.(?:cs|js|mjs|json|md|ps1|py|txt)$' } | ForEach-Object {
       Get-Content -LiteralPath (Join-Path $packageRoot.FullName $_) -Raw
     }) -join "`n"
-    foreach ($pattern in @('C:\\Users\\yang', 'E:\\codex', 'sk-[A-Za-z0-9_-]{20,}', 'Bearer\s+[A-Za-z0-9._-]{16,}')) {
+    foreach ($pattern in @('C:\\Users\\yang', 'C:\\Users\\Administrator', 'D:\\AIWorkspace', 'E:\\codex', 'sk-[A-Za-z0-9_-]{20,}', 'Bearer\s+[A-Za-z0-9._-]{16,}')) {
       if ($text -match $pattern) { throw "Potential secret or personal path found in release: $pattern" }
     }
     if ($actual -match 'themes|renderer-inject|\.exe$|theme-manager|build-exe') { throw 'Theme or executable content leaked into the release.' }
@@ -384,6 +387,9 @@ if (-not $SkipPackageTest) {
     $installedDirectory = Join-Path $installRoot $version
     if (-not (Test-Path -LiteralPath (Join-Path $installedDirectory 'scripts\start-monitor.ps1') -PathType Leaf)) {
       throw 'Persistent installer did not copy the runtime scripts.'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $installedDirectory 'native-overlay\CodexUsageOverlay.exe') -PathType Leaf)) {
+      throw 'Persistent installer did not compile the native companion executable.'
     }
     if (Test-Path -LiteralPath (Join-Path $installedDirectory 'node_modules')) { throw 'Persistent installer copied node_modules.' }
 
