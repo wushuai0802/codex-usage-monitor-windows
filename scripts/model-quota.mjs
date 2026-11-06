@@ -27,6 +27,7 @@ export function resolveModel(labels,models){
 
 export function quotaSource(model,snapshot,loading=false,error=null){
   const source=sourceForModel(model),data=snapshot?.data||{},metrics=[];
+  let dataAt=snapshot?.observedAt||null;
   const add=(id,label,value,detail='',primary=false)=>metrics.push({id,label,value,display:`${label} ${value}`,detail,defaultVisible:primary});
   let remaining='读取中',label='个人模型额度',detail='';
   if(!source){remaining='未识别';error='当前模型没有配置个人额度来源。';}
@@ -42,6 +43,7 @@ export function quotaSource(model,snapshot,loading=false,error=null){
     for(const item of periods){const name={daily:'日',weekly:'周',monthly:'月'}[item.period]||item.period;add(item.period,name+'已用 / 上限',finite(item.limit)?`${amount(item.used)} / ${amount(item.limit)} ${data.unit||'USD'}`:'未设置独立上限');}
     if(data.expiresAt)add('expiry','到期时间',date(data.expiresAt));
   }else if(snapshot&&source==='workbuddy-cn'){
+    dataAt=data.observedAt||null;
     label='个人额度 · CN积分';
     remaining=`${amount(data.balance)} ${data.unit||'credit'}`;
     add('remaining','CN积分',remaining,'仅统计个人 WorkBuddy CN 积分；LV 不计入。积分不等于免费模型可用次数。',true);
@@ -55,6 +57,8 @@ export function quotaSource(model,snapshot,loading=false,error=null){
     const accounts=allAccounts.filter(account=>Array.isArray(account.models)?account.models.includes(model):group==='gemini')
       .map(account=>({...account,windows:(account.windows||[]).filter(item=>(item.group||'gemini')===group)}));
     const windows=accounts.flatMap(account=>account.windows||[]).filter(item=>finite(item.remainingPercent));
+    const observations=windows.map(item=>item.observedAt).filter(value=>finite(value)&&value>0);
+    dataAt=observations.length?Math.min(...observations):null;
     remaining=windows.length?`${Math.min(...windows.map(item=>item.remainingPercent)).toFixed(1)}%`:'未提供';
     const groupName={gemini:'Gemini',argon:'Argon','third-party':'Claude/GPT'}[group];
     add('remaining',`${groupName}剩余`,remaining,'具备当前模型权限的已读账户中，对应额度组各周期的最低剩余比例，不是账号额度总和或本次请求实际路由账号。',true);
@@ -71,7 +75,7 @@ export function quotaSource(model,snapshot,loading=false,error=null){
   if(observed)add('observed','额度查询时间',date(observed));
   const messages=[error,...(snapshot?.errors||[])].filter(Boolean);
   return {id:'model-quota',label,accountType:'model-quota',status:messages.length||snapshot?.stale?'stale':snapshot?'ready':loading?'loading':'unavailable',
-    error:messages.join('；')||null,fetchedAt:observed||null,nextRefreshAt:observed?observed+60000:null,metrics};
+    error:messages.join('；')||null,fetchedAt:observed||null,dataAt,nextRefreshAt:observed?observed+60000:null,metrics};
 }
 
 function sshQuery(config,model,force){

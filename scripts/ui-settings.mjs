@@ -40,7 +40,13 @@ export function normalizeUiSettings(value) {
           && SOURCE_ID_PATTERN.test(key.slice(0, separator)) && METRIC_ID_PATTERN.test(key.slice(separator + 1));
       }).map((key) => key.replace(/^(session|official):currentStatus$/, "$1:executionTime")))].slice(0, 64)
     : [];
-  const normalized = { schemaVersion: UI_SETTINGS_SCHEMA_VERSION, metrics, metricOrder };
+  const metricPriority = Array.isArray(value.metricPriority)
+    ? [...new Set(value.metricPriority.filter((key) => typeof key === "string"
+      && key.length <= 82 && /^[a-zA-Z0-9_-]{1,32}:[a-zA-Z0-9_-]{1,48}$/.test(key)
+      && !key.startsWith("quota-token:")))].slice(0, 64)
+    : [];
+  const theme = ["auto", "light", "dark"].includes(value.theme) ? value.theme : "auto";
+  const normalized = { schemaVersion: UI_SETTINGS_SCHEMA_VERSION, metrics, metricOrder, metricPriority, theme };
   for (const field of VERSION_FIELDS) normalized[field] = safeVersion(value[field]);
   for (const field of BOOLEAN_FIELDS) normalized[field] = Boolean(value[field]);
   // Preserve the optional API-column layout for existing settings files. A genuinely

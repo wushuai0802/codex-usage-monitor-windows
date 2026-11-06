@@ -3,6 +3,7 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { IpcRoute } from './ipc-route.mjs';
+import { SourceCache, quotaCacheKey, retentionOrder, moveRetention } from './source-cache.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -136,11 +137,12 @@ let baseUsage = null;
 let anchor = null;
 let dirty = true;
 let lastHandledCmdSeq = 0;
+let publishedMetricKeys = [];
 const warmCachePath = path.join(opts.stateDir, 'warm-cache.json');
-let warmCache = { at: 0, officialRows: [], quotaByKey: {} };
+let warmCache = new SourceCache();
 try {
   const parsed = JSON.parse((await fs.readFile(warmCachePath, 'utf8')).replace(/^\uFEFF/, ''));
-  if (parsed && Date.now() - Number(parsed.at || 0) < 15 * 60 * 1000) warmCache = parsed;
+  warmCache = new SourceCache(parsed);
 } catch {}
 
 const codexCli = resolveRunnableCodexCli();
@@ -289,6 +291,17 @@ async function handleCommands() {
     }
     dirty = true;
   }
+  if (cmd.type === 'setTheme' && ['auto', 'light', 'dark'].includes(cmd.theme)) {
+    settings = await settingsStore.save({ ...settings, theme: cmd.theme });
+    dirty = true;
+  }
+  if (cmd.type === 'movePriority' && typeof cmd.key === 'string' && [-1, 1].includes(cmd.direction)) {
+    const order = moveRetention(publishedMetricKeys, settings.metricPriority, cmd.key, cmd.direction);
+    if (order) {
+      settings = await settingsStore.save({ ...settings, metricPriority: order });
+      dirty = true;
+    }
+  }
 }
 
 async function writeAtomicJson(targetPath, payload) {
@@ -326,30 +339,8 @@ async function publish() {
   const forecastRows = normalizeSourceMetrics('reset-forecast', usage.sources['reset-forecast'], now);
   const quotaRows = normalizeSourceMetrics('model-quota', modelQuotaSource, now);
 
-  const quotaBucketKey = activeModel
-    ? (activeModel.startsWith('gemini-4-argon-') ? 'ag:argon'
-      : activeModel.startsWith('gemini-') ? 'ag:gemini'
-      : /^(?:claude-|gpt-oss-)/.test(activeModel) ? 'ag:third-party'
-      : activeModel.startsWith('deepseek-') ? 'wb:cn'
-      : activeModel.startsWith('gpt-') ? 'paw' : null)
-    : null;
-
-  let effectiveOfficialRows = officialRows;
-  if (usage.sources.official?.status === 'ready' && officialRows.length) {
-    warmCache.officialRows = officialRows;
-    warmCache.at = now;
-  } else if (usage.sources.official?.status === 'loading' && warmCache.officialRows?.length) {
-    effectiveOfficialRows = warmCache.officialRows.map((r) => OFFICIAL_LABEL_FIX[r.id] ? { ...r, label: OFFICIAL_LABEL_FIX[r.id] } : r);
-  }
-
-  let effectiveQuotaRows = quotaRows;
-  if (quotaBucketKey && modelQuotaSource.status === 'ready' && quotaRows.length) {
-    warmCache.quotaByKey ||= {};
-    warmCache.quotaByKey[quotaBucketKey] = quotaRows;
-    warmCache.at = now;
-  } else if (quotaBucketKey && modelQuotaSource.status === 'loading' && warmCache.quotaByKey?.[quotaBucketKey]?.length) {
-    effectiveQuotaRows = warmCache.quotaByKey[quotaBucketKey];
-  }
+  const officialView = warmCache.resolve('official', usage.sources.official, officialRows, now);
+  const quotaView = warmCache.resolve(quotaCacheKey(activeModel), modelQuotaSource, quotaRows, now);
 
   const forecastSrc = usage.sources['reset-forecast'];
   const resetMethodVal = forecastSrc?.resetMethod === 'banked' ? '发放重置卡'
@@ -363,9 +354,9 @@ async function publish() {
 
   const sourceDefs = [
     { id: 'session', title: '本会话', status: usage.sources.session?.status || 'ready', error: usage.sources.session?.error || null, rows: sessionRows, visible: true, canRefresh: false },
-    { id: 'official', title: '官方订阅', status: usage.sources.official?.status || 'loading', error: usage.sources.official?.error || null, rows: effectiveOfficialRows, visible: true, canRefresh: false },
+    { id: 'official', title: '官方订阅', ...officialView, error: usage.sources.official?.error || null, visible: true, canRefresh: false },
     { id: 'reset-forecast', title: '重置概率预测（仅供参考）', status: forecastSrc?.status || 'unavailable', error: forecastSrc?.error || null, rows: forecastRows, resetMethodText: `预告方式：${resetMethodVal}`, latestActivity, visible: Boolean(settings.showResetForecast) && forecastRows.length > 0, canRefresh: false },
-    { id: 'model-quota', title: modelQuotaSource.label || '个人额度', status: modelQuotaSource.status || 'loading', error: modelQuotaSource.error || null, rows: effectiveQuotaRows, visible: settings.showApiColumns !== false, canRefresh: true },
+    { id: 'model-quota', title: modelQuotaSource.label || '个人额度', ...quotaView, error: modelQuotaSource.error || null, visible: settings.showApiColumns !== false, canRefresh: true },
   ];
 
   const selectedMap = new Map();
@@ -394,6 +385,7 @@ async function publish() {
     rawValue: r.value,
     detail: r.detail,
   }));
+  publishedMetricKeys = stripMetrics.map(row => row.key);
 
   const payload = {
     at: now,
@@ -401,22 +393,25 @@ async function publish() {
     threadId,
     model: activeModel,
     route: routeStatus,
-    quotaStatus: modelQuotaSource.status,
-    officialStatus: usage.sources.official?.status || 'loading',
+    quotaStatus: quotaView.status,
+    officialStatus: officialView.status,
     nextRefreshAt: usage.nextRefreshAt || null,
     settings: {
       minimalMode: Boolean(settings.minimalMode),
       refreshEvery30Seconds: Boolean(settings.refreshEvery30Seconds),
       showResetForecast: Boolean(settings.showResetForecast),
       showApiColumns: settings.showApiColumns !== false,
+      theme: settings.theme,
+      metricPriority: retentionOrder(stripMetrics.map(row => row.key), settings.metricPriority),
     },
     metrics: stripMetrics,
     columns: sourceDefs.filter((c) => c.visible),
     details: sourceDefs.flatMap((c) => c.rows),
   };
   await writeAtomicJson(path.join(opts.stateDir, 'metrics.json'), payload);
-  if (warmCache.at === now) {
-    writeAtomicJson(warmCachePath, warmCache).catch(() => {});
+  if (warmCache.dirty) {
+    await writeAtomicJson(warmCachePath, warmCache.serialize());
+    warmCache.dirty = false;
   }
 }
 
@@ -432,6 +427,7 @@ let lastPublish = 0;
 let publishing = false;
 let lastParentCheck = 0;
 let lastAnchorModel = null;
+let anchorWriteTime = -1;
 
 const tick = setInterval(async () => {
   if (stopped) return;
@@ -443,7 +439,12 @@ const tick = setInterval(async () => {
   try { await fs.access(path.join(opts.stateDir, 'stop')); await stop(); return; } catch {}
   await handleCommands();
   try {
-    anchor = JSON.parse((await fs.readFile(path.join(opts.stateDir, 'anchor.json'), 'utf8')).replace(/^\uFEFF/, ''));
+    const anchorPath = path.join(opts.stateDir, 'anchor.json');
+    const stat = await fs.stat(anchorPath);
+    if (stat.mtimeMs !== anchorWriteTime) {
+      anchor = JSON.parse((await fs.readFile(anchorPath, 'utf8')).replace(/^\uFEFF/, ''));
+      anchorWriteTime = stat.mtimeMs;
+    }
   } catch {
     anchor = null;
   }
@@ -461,7 +462,7 @@ const tick = setInterval(async () => {
     publishing = true;
     try { await publish(); } catch {} finally { publishing = false; }
   }
-}, 150);
+}, 250);
 
 async function stop() {
   if (stopped) return;
