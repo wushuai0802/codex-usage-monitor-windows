@@ -75,6 +75,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Live rate and read-only bridge tests failed.' 
 if ($LASTEXITCODE -ne 0) { throw 'Model-aware quota tests failed.' }
 & $node (Join-Path $root 'tests\native-companion.mjs')
 if ($LASTEXITCODE -ne 0) { throw 'Native companion IPC route tests failed.' }
+& $node (Join-Path $root 'tests\source-cache.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'Native source cache tests failed.' }
+& $pwsh -NoLogo -NoProfile -File (Join-Path $root 'tests\native-ui.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Native layout tests failed.' }
 & $pwsh -NoLogo -NoProfile -File (Join-Path $root 'tests\startup-wait.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Slow startup recovery tests failed.' }
 & $pwsh -NoLogo -NoProfile -File (Join-Path $root 'tests\launcher-reentry.ps1')
@@ -348,7 +352,7 @@ if (-not $SkipPackageTest) {
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
     $archive = Get-ChildItem -LiteralPath $testRoot -Filter '*.zip' -File | Select-Object -First 1
     if (-not $archive) { throw 'Release archive was not created.' }
-    if ($archive.Length -gt 750KB) { throw "Release archive is unexpectedly large: $($archive.Length) bytes." }
+    if ($archive.Length -gt 800KB) { throw "Release archive is unexpectedly large: $($archive.Length) bytes." }
     $extract = Join-Path $testRoot 'extract'
     Expand-Archive -LiteralPath $archive.FullName -DestinationPath $extract
     $packageRoot = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -First 1

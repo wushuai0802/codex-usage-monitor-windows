@@ -45,6 +45,8 @@ try {
     schemaVersion: 2,
     metrics: { official: ["secondaryRemaining", "currentTaskTokens"] },
     metricOrder: ["official:secondaryRemaining", "api-account:balance"],
+    metricPriority: [],
+    theme: "auto",
     apiKeyMetricsVersion: 0,
     officialMetricsVersion: 2,
     unifiedMetricsVersion: 1,
@@ -78,10 +80,15 @@ try {
     metricOrder: ["official:secondaryRemaining", "quota-token:wholeEstimateTokens", "api-account:balance"],
     autoResumeMessage: "请继续完成当前任务",
     autoResumeThreads: { [threadId]: { enabled: true, message: "请继续完成当前任务" }, invalid: { enabled: true, message: "bad" } },
+    theme: "dark",
+    metricPriority: ["model-quota:remaining", "session:outputSpeed", "model-quota:remaining", "../invalid"],
   });
   await first.flush();
 
   const restarted = await createUiSettingsStore(settingsPath);
+  assert.equal(restarted.current.theme, "dark");
+  assert.deepEqual(restarted.current.metricPriority, ["model-quota:remaining", "session:outputSpeed"]);
+  assert.equal(normalizeUiSettings({ theme: "unknown" }).theme, "auto");
   assert.deepEqual(restarted.current.metrics, {
     official: ["secondaryRemaining", "currentTaskTokens"],
     "api-account": [],

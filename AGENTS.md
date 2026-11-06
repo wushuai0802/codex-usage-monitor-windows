@@ -9,8 +9,8 @@ When the user asks to install this project:
 1. Confirm that the host is Windows and read `README.md` before acting.
 2. Use the checked-out repository or an extracted official Release. Do not download executables or scripts from unrelated locations.
 3. Run `pwsh -NoProfile -File .\install.ps1`. The installer checks Microsoft Store and common non-Store Codex paths first; if no executable is found, answer its path prompts instead of guessing. If PowerShell 7 is unavailable, use `powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`.
-4. The installer must create a versioned copy under `%LOCALAPPDATA%\Programs\CodexUsageMonitor` and a desktop shortcut named `Codex Usage Monitor`.
-5. Verify the installed version directory and shortcut. Its target must be `wscript.exe`, which launches PowerShell invisibly through `launch-codex-monitor-hidden.vbs`. Do not launch, restart, or terminate the user's current Codex session. Tell the user to exit Codex normally and then use the new shortcut.
+4. The installer defaults to `NativeCompanion`, creating a versioned copy under `%LOCALAPPDATA%\Programs\CodexUsageMonitor` and a login startup entry for the companion. Honor an explicitly selected existing runtime directory.
+5. Verify the installed version, native companion startup entry and fresh companion status. The user's normal Codex icon remains the entrypoint. Only explicit `-Mode LegacyCdp` uses the `wscript.exe` / `launch-codex-monitor-hidden.vbs` desktop shortcut. Never restart or terminate Codex to install or verify the monitor.
 6. Official subscription monitoring needs no API key or additional configuration.
    For Microsoft Store installations, run the official usage CLI from the versioned user-state mirror under `%LOCALAPPDATA%\CodexUsageMonitor\runtime\codex-cli`; never execute it directly from or modify `WindowsApps`.
 
@@ -86,9 +86,9 @@ Do not replace the normal Codex shortcut. Do not modify `WindowsApps`, `app.asar
 ## Changes And Verification
 
 - Preserve user changes and `*.local.json` files. Never commit provider secrets or personal paths.
-- Keep CDP bound to `127.0.0.1` and retain the policy that an already-running Codex instance is not forcefully restarted.
-- Preserve automatic CDP port fallback. Read the selected runtime port from `%LOCALAPPDATA%\CodexUsageMonitor\state.json` when verifying an installed monitor.
+- NativeCompanion does not require CDP. Preserve the no-restart policy; for explicit LegacyCdp mode keep CDP bound to `127.0.0.1` and preserve port fallback.
+- For native runtime checks read `companion/status.json` and `state.json`; process presence alone does not prove visible placement. Preserve private configuration, user settings and history during replacement.
 - Preserve the opt-in automatic update boundary: check no more than once per 24 hours, accept only a newer non-draft/non-prerelease GitHub Release with the exact package name, require its GitHub SHA-256 digest, validate ZIP paths and size limits, and keep the current installation running on every failure. Never restart or terminate Codex as part of an update.
 - After code or configuration-template changes, run `pwsh -NoProfile -File .\tests\run-tests.ps1`.
 - After installer or package-manifest changes, also verify `pwsh -NoProfile -File .\install.ps1 -InstallRoot <temporary-directory> -SkipShortcut` and remove only that exact temporary directory afterward.
-- Report the installed path, shortcut path, selected mode, tests run, and any action the user still needs to take. Never claim that the monitor is visible until it has actually been launched and verified in a CDP-enabled Codex session.
+- Report the installed path, startup entry, selected mode, tests run, and remaining verification limits. Verify native placement in the actual UI before claiming visible success; a status snapshot alone is only status evidence.
