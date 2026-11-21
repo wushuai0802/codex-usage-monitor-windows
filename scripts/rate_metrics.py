@@ -7,6 +7,7 @@ from __future__ import annotations
 import collections
 import contextlib
 import datetime as dt
+import hashlib
 import json
 import math
 import os
@@ -263,6 +264,33 @@ class MetricsCollector:
         self.stop = threading.Event()
         self.last_scan = 0.0
         self.last_error = None
+
+    def resolve_title_digest(self, digest):
+        """Match a toolbar title against local thread metadata without returning titles."""
+        def title_digest(name, title):
+            label = (name or "").strip() or (title or "").strip()
+            if 0 < len(label) <= 300:
+                return hashlib.sha256(label.encode("utf-8")).hexdigest()
+            return None
+
+        try:
+            with read_only_db(self.home / "state_5.sqlite") as db:
+                db.create_function("monitor_title_digest", 2, title_digest, deterministic=True)
+                matches = db.execute(
+                    "SELECT id, archived, source, rollout_path FROM threads "
+                    "WHERE monitor_title_digest(name, title) = ? LIMIT 2", (digest,)
+                ).fetchall()
+            if len(matches) != 1:
+                return None
+            row = matches[0]
+            if row["archived"] or row["source"] not in {"vscode", "cli", "exec", "appServer", "app-server", "desktop"}:
+                return None
+            rollout = pathlib.Path(row["rollout_path"])
+            if rollout.suffix == ".jsonl" and rollout.is_absolute() and rollout.is_file():
+                return row["id"]
+        except (OSError, sqlite3.Error, TypeError, ValueError):
+            pass
+        return None
 
     def discover(self):
         with read_only_db(self.home / "state_5.sqlite") as db:

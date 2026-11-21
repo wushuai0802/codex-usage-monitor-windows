@@ -9,6 +9,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -187,6 +188,7 @@ internal sealed class Anchor {
     public PxRect Frame, Model;
     public int Left, Right, SampleX, SampleY;
     public string ModelId;
+    public string ThreadTitleDigest;
     public long At;
     public double Scale;
 }
@@ -198,6 +200,8 @@ internal sealed class Locator {
     private IntPtr _window;
     private AutomationElement _edit, _model, _permission;
     private readonly List<AutomationElement> _rowButtons = new List<AutomationElement>();
+    private AutomationElement _threadTitle;
+    private DateTime _threadTitleSearchAt;
     private DateTime _searchAt = DateTime.MinValue;
     internal string Stage = "starting";
 
@@ -282,13 +286,66 @@ internal sealed class Locator {
         return r.IsEmpty ? new PxRect() : new PxRect((int)Math.Round(r.Left), (int)Math.Round(r.Top), (int)Math.Round(r.Right), (int)Math.Round(r.Bottom));
     }
 
-    internal void Invalidate() { _searchAt = DateTime.MinValue; }
+    internal void Invalidate() {
+        _searchAt = DateTime.MinValue;
+        _threadTitleSearchAt = DateTime.MinValue;
+    }
+
+    // Read only the window's Codex chat toolbar, outside the conversation body.
+    private string ThreadTitleDigest(IntPtr window, PxRect frame, PxRect edit, double scale) {
+        try {
+            if (DateTime.UtcNow >= _threadTitleSearchAt) {
+                _threadTitleSearchAt = DateTime.UtcNow.AddSeconds(2);
+                _threadTitle = null;
+                var names = new OrCondition(
+                    new PropertyCondition(AutomationElement.NameProperty, "Chat toolbar"),
+                    new PropertyCondition(AutomationElement.NameProperty, "聊天工具栏"),
+                    new PropertyCondition(AutomationElement.NameProperty, "聊天工具列"));
+                var condition = new AndCondition(names,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ToolBar));
+                var root = AutomationElement.FromHandle(window);
+                var toolbars = root.FindAll(TreeScope.Descendants, condition);
+                int editorCenter = edit.Left + edit.Width / 2;
+                var candidates = new List<AutomationElement>();
+                foreach (AutomationElement toolbar in toolbars) {
+                    var box = Box(toolbar);
+                    if (toolbar.Current.IsOffscreen || box.IsEmpty || box.Top < frame.Top
+                        || box.Top > frame.Top + 112 * scale || box.Height > 80 * scale
+                        || editorCenter < box.Left || editorCenter >= box.Right) continue;
+                    var titles = toolbar.FindAll(TreeScope.Children,
+                        new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text));
+                    foreach (AutomationElement title in titles) {
+                        if (!title.Current.IsOffscreen && !Box(title).IsEmpty) candidates.Add(title);
+                    }
+                }
+                if (candidates.Count == 1) _threadTitle = candidates[0];
+            }
+            if (_threadTitle == null || _threadTitle.Current.IsOffscreen) return null;
+            var name = (_threadTitle.Current.Name ?? "").Trim();
+            if (name.Length == 0 || name.Length > 300) return null;
+            using (var sha = SHA256.Create()) {
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(name))).Replace("-", "").ToLowerInvariant();
+            }
+        } catch (ElementNotAvailableException) {
+            _threadTitle = null;
+            _threadTitleSearchAt = DateTime.MinValue;
+            return null;
+        } catch (InvalidOperationException) {
+            return null;
+        } catch (COMException) {
+            return null;
+        }
+    }
 
     internal Anchor Find(IntPtr forced) {
         ReloadCatalogIfNeeded();
         var window = forced != IntPtr.Zero ? forced : Win.CodexWindow();
-        if (!Win.Live(window)) { Stage = "host-hidden"; _window = IntPtr.Zero; _edit = null; _model = null; _permission = null; _rowButtons.Clear(); return null; }
+        if (!Win.Live(window)) { Stage = "host-hidden"; _window = IntPtr.Zero; _edit = null; _model = null; _permission = null; _rowButtons.Clear(); _threadTitle = null; return null; }
         var frame = Win.Frame(window);
+        if (window != _window) {
+            _threadTitle = null;
+            _threadTitleSearchAt = DateTime.MinValue;
+        }
         if (window != _window || _model == null || _edit == null || DateTime.UtcNow >= _searchAt) { _window = window; Search(window, frame); }
         try {
             if (_edit == null || _model == null || _edit.Current.IsOffscreen || _model.Current.IsOffscreen) {
@@ -338,6 +395,7 @@ internal sealed class Locator {
                 SampleX = leftAnchorRight + (int)Math.Max(2, Math.Round(4 * scale)),
                 SampleY = model.Top + (int)Math.Max(2, Math.Round(4 * scale)),
                 ModelId = id,
+                ThreadTitleDigest = forced == IntPtr.Zero ? ThreadTitleDigest(window, frame, edit, scale) : null,
                 Scale = scale,
                 At = Json.Now()
             };

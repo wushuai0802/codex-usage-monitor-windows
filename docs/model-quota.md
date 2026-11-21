@@ -75,3 +75,24 @@ Antigravity 的 project 必须来自原认证元数据；缺失时使用带旧�
 - CN 接口读取已有余额缓存，界面保留余额本身的更新时间；读取成功不代表刚刷新了上游积分。
 - 不调用生成、签到、账号刷新或重新登录接口；不会改变 CPA 路由与账号。
 - SSH 不可达、格式变化或模型不匹配时，tok/s 和原有 Token 功能仍独立工作。
+
+## CPA 会话额度
+
+原生浮层默认从桌面登录账号读取「官方订阅」。使用 CPA 直连 Codex OAuth 或 Paw 订阅时，可以用 CPAM 记录替换这一栏。原有 5h／7d 勾选和排序通用。
+
+1. 在 CPAM 主机的栈目录内，将 `scripts/cpa-session-quota-reader.py` 单独放到 `desktop-quota-reader/`。脚本从同一栈的 `data/cpam/usage.sqlite` 只读查询，要求 CPAM 采集记录包含会话、请求、账号和上游额度字段。
+2. 在 Windows 安装目录创建 `config/cpa-session-quota.local.json`，填入已有 SSH 主机别名及读取器路径。确认该主机已在 SSH 的 known_hosts 中，运行读取器的既有权限能读取 CPAM 数据库。
+
+~~~json
+{
+  "enabled": true,
+  "sshHost": "quota-host",
+  "remoteReader": "/srv/cpa-stack/desktop-quota-reader/cpa-session-quota-reader.py"
+}
+~~~
+
+3. 重新启动伴随浮层以加载配置。将 `enabled` 改为 `false` 后再启动浮层，即可恢复桌面官方订阅读数。
+
+浮层确认当前会话 ID 后，读取 CPAM 近三天内该会话最近一次成功的 Responses 生成记录。同一请求失败后换号，以实际成功的账号为准。Codex OAuth 额度来自响应中的 5 小时／7 天窗口。Paw 用 CPAM 本机管理接口按实际命中的认证项读取周订阅剩余 USD，需要现有 `secrets/cpam-admin.key` 和 CPAM 的 loopback 管理入口。两个来源都提供采样和重置时间。上游未提供窗口、窗口已到期、无法确认会话或请求走其他线路时显示 `--`。个人额度配置独立使用。
+
+当本会话命中 Paw 且个人额度也属于 Paw 时，周额度只在「个人额度 · Paw」栏显示，折叠栏使用「Paw 剩余」的勾选。命中直连 Codex 账号时，按原勾选显示 5h／7d。

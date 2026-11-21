@@ -24,6 +24,8 @@ tok/s 来自本地 Codex usage 事件。生成中可能使用估算或暂存读�
 
 这是非官方的伴随界面工具，不是 OpenAI 官方插件。默认伴随浮层模式通过只读 `\\.\pipe\codex-ipc` 与 Windows UI Automation 跟随窗口（兼容旧版 `-Mode LegacyCdp` 仍仅绑定本机 **127.0.0.1**），不修改 WindowsApps 或 app.asar，不关闭 workspace trust，也不强制结束 Codex。
 
+旧 IPC 管道不可用时，原生模式用当前聊天工具栏标题的摘要匹配本地会话。标题无法唯一匹配时，本会话指标显示为暂无数据，订阅与供应商额度仍可独立显示。
+
 ## 安装
 
 在 [Releases](https://github.com/wushuai0802/codex-usage-monitor-windows/releases) 下载 ZIP 与同名 SHA-256 文件，核对后解压：
@@ -45,6 +47,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ## 配置
 
 点击输入框内的指标打开面板，选择要显示的项目；tok/s 始终只显示数字和单位。官方订阅来自桌面登录账号，和供应商额度是两种数据。
+
+原生模式可将「官方订阅」栏切换为「CPA 实际账号」，按本会话最近成功的请求显示 Codex 订阅的 5h／7d 额度或 Paw 的周 USD 额度。配置见 [CPA 会话额度](docs/model-quota.md#cpa-会话额度)。
 
 原生面板的“设置”可选择自动／浅色／深色，并通过 ↑↓ 调整窄窗口下的指标保留优先级；这不会改变原来的显示顺序或勾选。默认优先保留 tok/s 和个人额度，窗口变宽后恢复全部已选指标。详情会按可用空间使用多列、两列或单列，内容较长时可滚动。
 

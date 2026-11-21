@@ -32,6 +32,30 @@ internal static class Json {
     internal static string Text(Dictionary<string, object> d, string key) { return Convert.ToString(Get(d, key)) ?? ""; }
     internal static bool Bool(Dictionary<string, object> d, string key, bool defVal) { var v = Get(d, key); return v is bool ? (bool)v : defVal; }
     internal static IEnumerable<object> Items(object value) { var array = value as object[]; if (array != null) return array; var list = value as ArrayList; return list == null ? new object[0] : list.Cast<object>(); }
+
+    internal static Dictionary<string, object> MetricsForWindow(Dictionary<string, object> snapshot, string windowKey) {
+        if (Text(snapshot, "sessionBinding") != "window-title"
+            || (windowKey != null && windowKey == Text(snapshot, "sessionAnchorKey"))) return snapshot;
+
+        // The new anchor can arrive before Node publishes its first reading. Keep shared quotas usable.
+        var shared = new Dictionary<string, object>(snapshot);
+        shared["metrics"] = Items(Get(snapshot, "metrics"))
+            .Where(item => !Text(Map(item), "key").StartsWith("session:", StringComparison.Ordinal)).ToArray();
+        shared["columns"] = Items(Get(snapshot, "columns"))
+            .Where(column => Text(Map(column), "id") != "session").ToArray();
+        return CpaQuotaForWindow(shared, 0);
+    }
+
+    internal static Dictionary<string, object> CpaQuotaForWindow(Dictionary<string, object> snapshot, long owner) {
+        if (!snapshot.ContainsKey("cpaQuotaOwner") || (owner > 0 && Text(snapshot, "cpaQuotaOwner") == owner.ToString())) return snapshot;
+        string column = Text(snapshot, "cpaQuotaColumn") == "model-quota" ? "model-quota" : "official";
+        var scoped = new Dictionary<string, object>(snapshot);
+        scoped["metrics"] = Items(Get(snapshot, "metrics"))
+            .Where(item => !Text(Map(item), "key").StartsWith(column + ":", StringComparison.Ordinal)).ToArray();
+        scoped["columns"] = Items(Get(snapshot, "columns"))
+            .Where(item => Text(Map(item), "id") != column).ToArray();
+        return scoped;
+    }
     internal static Dictionary<string, object> Read(string path) { return new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 }.Deserialize<Dictionary<string, object>>(File.ReadAllText(path)); }
     internal static void Write(string path, object value) { var temp = path + "." + Process.GetCurrentProcess().Id + ".tmp"; File.WriteAllText(temp, new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 }.Serialize(value), new UTF8Encoding(false)); if (File.Exists(path)) File.Replace(temp, path, null); else File.Move(temp, path); }
 }

@@ -2684,7 +2684,7 @@ export class ResetForecastClient {
 }
 
 export class CombinedUsageClient {
-  constructor({ command = resolveCodexExecutable(), provider = loadApiProviderConfig(), refreshMs = DEFAULT_REFRESH_MS, forecastFetch = globalThis.fetch, onUpdate = () => {} } = {}) {
+  constructor({ command = resolveCodexExecutable(), provider = loadApiProviderConfig(), refreshMs = DEFAULT_REFRESH_MS, forecastFetch = globalThis.fetch, readOfficialSubscription = true, onUpdate = () => {} } = {}) {
     this.onUpdate = onUpdate;
     this.history = new UsageHistory({ filePath: process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "CodexUsageMonitor", "usage-history.json") : null });
     this.refreshMs = refreshMs;
@@ -2699,7 +2699,7 @@ export class CombinedUsageClient {
       history: this.history,
       onUpdate: (view) => { this.localOfficialView = view; this.emit(); },
     });
-    this.official = new UsageClient({
+    this.official = readOfficialSubscription ? new UsageClient({
       command,
       refreshMs,
       managed: true,
@@ -2718,7 +2718,7 @@ export class CombinedUsageClient {
         }
         this.emit();
       },
-    });
+    }) : null;
     this.account = new ApiAccountUsageClient({ refreshMs, managed: true, onUpdate: (view) => { this.accountView = view; this.emit(); } });
     this.api = new ApiUsageClient({ provider, refreshMs, managed: true, onUpdate: (view) => { this.apiView = view; this.emit(); } });
     this.forecast = new ResetForecastClient({ fetchImpl: forecastFetch, managed: true, onUpdate: (view) => { this.forecastView = view; this.emit(); } });
@@ -2772,7 +2772,7 @@ export class CombinedUsageClient {
   setRefreshInterval(refreshMs) {
     if (![30000, 60000].includes(refreshMs) || refreshMs === this.refreshMs) return;
     this.refreshMs = refreshMs;
-    for (const client of [this.official, this.account, this.api]) client.refreshMs = refreshMs;
+    for (const client of [this.official, this.account, this.api]) if (client) client.refreshMs = refreshMs;
     if (this.timer) this.scheduleRefresh();
   }
 
@@ -2782,21 +2782,21 @@ export class CombinedUsageClient {
     this.timer = setInterval(() => {
       this.nextRefreshAt = Date.now() + this.refreshMs;
       this.emit();
-      Promise.all([this.official.refresh(), this.account.refresh(), this.api.refresh(), this.forecast.refresh()]).catch(() => {});
+      Promise.all([this.official?.refresh(), this.account.refresh(), this.api.refresh(), this.forecast.refresh()]).catch(() => {});
     }, this.refreshMs);
     this.timer.unref?.();
     this.emit();
   }
 
   async start() {
-    await Promise.all([this.official.start(), this.localOfficial.start(), this.account.start(), this.api.start(), this.forecast.start()]);
+    await Promise.all([this.official?.start(), this.localOfficial.start(), this.account.start(), this.api.start(), this.forecast.start()]);
     this.scheduleRefresh();
   }
 
   async stop() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    await Promise.all([this.official.stop(), this.localOfficial.stop(), this.account.stop(), this.api.stop(), this.forecast.stop()]);
+    await Promise.all([this.official?.stop(), this.localOfficial.stop(), this.account.stop(), this.api.stop(), this.forecast.stop()]);
     this.history?.flush(true);
   }
 }

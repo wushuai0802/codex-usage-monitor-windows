@@ -13,6 +13,7 @@ Thumbs.db
 config/providers/*.local.json
 config/providers/*.secret.json
 config/model-quota.local.json
+config/cpa-session-quota.local.json
 reader.local.json
 __pycache__/
 *.pyc

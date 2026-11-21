@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { RouteState } from '../native-overlay/ipc-route.mjs';
+import { RouteState, selectSessionRoute, windowTitleHint } from '../native-overlay/ipc-route.mjs';
 
 const a = '00000000-0000-0000-0000-000000000001';
 const b = '00000000-0000-0000-0000-000000000002';
@@ -39,4 +39,15 @@ assert.equal(route.threadId, b, 'Remote host broadcasts must not override local 
 
 route.reset();
 assert.equal(route.threadId, null);
+
+const anchor = { located: true, hwnd: 62, pid: 4, at: 1000, titleDigest: 'a'.repeat(64) };
+const hint = windowTitleHint(anchor, 4, 2000);
+const match = { key: hint.key, threadId: a };
+assert.equal(selectSessionRoute(null, hint, match).threadId, a);
+assert.equal(selectSessionRoute(b, hint, match).binding, 'ipc');
+assert.equal(selectSessionRoute(null, windowTitleHint({ ...anchor, hwnd: 63 }, 4, 2000), match).threadId, null);
+assert.equal(selectSessionRoute(null, windowTitleHint({ ...anchor, titleDigest: 'b'.repeat(64) }, 4, 2000), match).threadId, null);
+assert.equal(windowTitleHint(anchor, 5, 2000), null, 'Previous overlay data cannot answer the current process.');
+assert.equal(windowTitleHint(anchor, 4, 11000), null, 'Expired window data cannot select a thread.');
+assert.equal(windowTitleHint({ ...anchor, located: false }, 4, 2000), null);
 console.log('PASS: native companion IPC route tracking.');

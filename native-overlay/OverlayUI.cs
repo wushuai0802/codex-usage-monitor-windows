@@ -373,6 +373,8 @@ internal sealed class PopoverWindow : Window {
 
         if (data == null) return;
         var cols = Json.Items(Json.Get(data, "columns")).Select(Json.Map).ToList();
+        var footerColumn = cols.Find(col => Json.Text(col, "id") == "official")
+            ?? cols.Find(col => Json.Text(col, "id") == "model-quota") ?? cols.FirstOrDefault();
         var settings = Json.Map(Json.Get(data, "settings"));
         bool minimalMode = Json.Bool(settings, "minimalMode", true);
 
@@ -416,7 +418,7 @@ internal sealed class PopoverWindow : Window {
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(6, 0, 0, 0),
                     Cursor = Cursors.Hand,
-                    ToolTip = "立即重新读取个人额度与官方订阅状态"
+                    ToolTip = "立即重新读取额度"
                 };
                 var btnTxt = new TextBlock {
                     Text = isBusy ? "读取中…" : "重新读取",
@@ -620,8 +622,7 @@ internal sealed class PopoverWindow : Window {
             Grid.SetRow(rowsStack, 1);
             colGrid.Children.Add(rowsStack);
 
-            // Official Column Bottom Settings Drawer & Countdown (matching original 3.3.0 layout!)
-            if (colId == "official") {
+            if (col == footerColumn) {
                 var footerStack = new StackPanel { Orientation = Orientation.Vertical, Margin = new Thickness(0, 8, 0, 0), VerticalAlignment = VerticalAlignment.Bottom };
                 if (_settingsOpen) {
                     var swGrid = new Grid { Margin = new Thickness(0, 0, 0, 6) };

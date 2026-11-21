@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { IpcRoute } from './ipc-route.mjs';
+import { IpcRoute, selectSessionRoute, windowTitleHint } from './ipc-route.mjs';
 import { SourceCache, quotaCacheKey, retentionOrder, moveRetention } from './source-cache.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -110,7 +110,8 @@ await fs.mkdir(opts.stateDir, { recursive: true });
 const scriptsUrl = (name) => pathToFileURL(path.join(opts.runtimeDir, 'scripts', name)).href;
 const { CombinedUsageClient } = await import(scriptsUrl('usage-client.mjs'));
 const { LiveRateClient, withLiveRate } = await import(scriptsUrl('live-rate.mjs'));
-const { ModelQuotaClient } = await import(scriptsUrl('model-quota.mjs'));
+const { ModelQuotaClient, sourceForModel } = await import(scriptsUrl('model-quota.mjs'));
+const { CpaSessionQuotaClient, pawModelQuota } = await import(scriptsUrl('cpa-session-quota.mjs'));
 const { createUiSettingsStore, normalizeUiSettings } = await import(scriptsUrl('ui-settings.mjs'));
 
 const settingsStore = await createUiSettingsStore();
@@ -135,6 +136,7 @@ let stopped = false;
 let routeStatus = { connected: false, threadId: null, activeThreadId: null, routeCount: 0 };
 let baseUsage = null;
 let anchor = null;
+let titleMatch = null;
 let dirty = true;
 let lastHandledCmdSeq = 0;
 let publishedMetricKeys = [];
@@ -148,26 +150,46 @@ try {
 const codexCli = resolveRunnableCodexCli();
 const rate = new LiveRateClient();
 const quota = new ModelQuotaClient({ onUpdate: () => { dirty = true; } });
-await quota.initialize();
+const cpaQuota = new CpaSessionQuotaClient({ onUpdate: () => { dirty = true; } });
+await Promise.all([quota.initialize(), cpaQuota.initialize()]);
 
 const usageClient = new CombinedUsageClient({
   command: codexCli,
   refreshMs: settings.refreshEvery30Seconds ? 30000 : 60000,
+  readOfficialSubscription: !cpaQuota.enabled,
   onUpdate: (u) => { baseUsage = u; dirty = true; },
 });
 
-function effectiveThreadId() {
-  return routeStatus.threadId || baseUsage?.currentThreadId || null;
+function currentTitleHint(now = Date.now()) {
+  return routeStatus.threadId ? null : windowTitleHint(anchor, opts.parentPid, now);
+}
+
+function updateTrackedSession() {
+  const { threadId } = selectSessionRoute(routeStatus.threadId, currentTitleHint(), titleMatch);
+  if (usageClient.setVisibleThreadIds(threadId ? [threadId] : [])) dirty = true;
 }
 
 const route = new IpcRoute((status) => {
   const prev = routeStatus.threadId;
   routeStatus = status;
   if (status.threadId !== prev) {
-    usageClient.setVisibleThreadIds(status.threadId ? [status.threadId] : []);
+    titleMatch = null;
+    updateTrackedSession();
     dirty = true;
   }
 });
+
+function freshAnchorOwner(now) {
+  return anchor?.located === true && Number.isSafeInteger(anchor.hwnd) && anchor.hwnd > 0
+    && Number.isSafeInteger(anchor.at) && anchor.at <= now && now - anchor.at < 10000
+    && (opts.parentPid <= 0 || anchor.pid === opts.parentPid) ? anchor.hwnd : null;
+}
+
+function cpaThreadForWindow(now) {
+  if (!freshAnchorOwner(now)) return null;
+  if (routeStatus.activeThreadId) return routeStatus.activeThreadId;
+  return selectSessionRoute(null, currentTitleHint(now), titleMatch).threadId;
+}
 
 function selectedIdsForSource(sourceId, availableIds) {
   const hasExplicit = Object.prototype.hasOwnProperty.call(settings.metrics || {}, sourceId);
@@ -217,8 +239,10 @@ function normalizeSourceMetrics(sourceId, source, now) {
     const compact = COMPACT_LABELS[m.id] ?? normalizedLabel;
     const minimalText = m.id === 'outputSpeed' ? value : value.replace(/\s+/g, ' ').trim();
     const normalText = m.id === 'outputSpeed' || !compact ? minimalText : `${compact} ${minimalText}`;
-    const selectable = sourceId !== 'model-quota' || m.id === 'remaining' || (settings.metrics?.['model-quota'] || []).includes(m.id);
-    const resetHint = sourceId === 'official' && (m.id === 'primaryRemaining' || m.id === 'secondaryRemaining')
+    const selectable = m.selectable !== false && (sourceId !== 'model-quota'
+      || m.id === 'remaining' || (settings.metrics?.['model-quota'] || []).includes(m.id));
+    const resetHint = (sourceId === 'official' && (m.id === 'primaryRemaining' || m.id === 'secondaryRemaining'))
+      || (sourceId === 'model-quota' && m.id === 'remaining')
       ? formatResetShort(m.resetsAt)
       : null;
     out.push({
@@ -254,7 +278,8 @@ async function handleCommands() {
   if (cmd.type === 'refreshQuota') {
     const model = anchor && Date.now() - Number(anchor.at || 0) < 15000 ? anchor.model : null;
     if (model) quota.refresh(model, true).catch(() => {});
-    usageClient.official?.refresh?.().catch(() => {});
+    if (cpaQuota.enabled) cpaQuota.refresh(cpaThreadForWindow(Date.now()), usageClient.refreshMs, true);
+    else usageClient.official?.refresh?.().catch(() => {});
     dirty = true;
     return;
   }
@@ -312,14 +337,16 @@ async function writeAtomicJson(targetPath, payload) {
 
 async function publish() {
   const now = Date.now();
-  const threadId = effectiveThreadId();
+  const { threadId, binding, anchorKey } = selectSessionRoute(routeStatus.threadId, currentTitleHint(now), titleMatch);
   let usage = baseUsage
     ? usageClient.usageForThread(baseUsage, threadId, now)
     : { sources: { session: { id: 'session', label: '本会话', status: 'loading', metrics: [] }, official: { id: 'official', label: '官方订阅', status: 'loading', metrics: [] } }, nextRefreshAt: null };
   usage = withLiveRate(usage, rate.get(threadId), threadId, now);
 
   const activeModel = anchor && now - Number(anchor.at || 0) < 15000 ? anchor.model : null;
-  const modelQuotaSource = quota.get(activeModel);
+  const cpaSource = cpaQuota.enabled ? cpaQuota.source(cpaThreadForWindow(now), now) : null;
+  const actualPawQuota = sourceForModel(activeModel) === 'paw' ? pawModelQuota(cpaSource) : null;
+  const modelQuotaSource = actualPawQuota || quota.get(activeModel);
   usage.sources['model-quota'] = modelQuotaSource;
 
   const sessionRows = normalizeSourceMetrics('session', usage.sources.session, now);
@@ -335,12 +362,18 @@ async function publish() {
       selectable: true,
     });
   }
-  const officialRows = normalizeSourceMetrics('official', usage.sources.official, now);
+  const subscriptionSource = cpaSource || usage.sources.official;
+  const officialRows = normalizeSourceMetrics('official', subscriptionSource, now);
   const forecastRows = normalizeSourceMetrics('reset-forecast', usage.sources['reset-forecast'], now);
   const quotaRows = normalizeSourceMetrics('model-quota', modelQuotaSource, now);
 
-  const officialView = warmCache.resolve('official', usage.sources.official, officialRows, now);
-  const quotaView = warmCache.resolve(quotaCacheKey(activeModel), modelQuotaSource, quotaRows, now);
+  const officialView = cpaSource
+    ? { rows: officialRows, status: cpaSource.status, sourceAt: cpaSource.sourceAt, readAt: cpaSource.readAt }
+    : warmCache.resolve('official', subscriptionSource, officialRows, now);
+  // The matched credential is session-specific. Keep it out of the shared model cache.
+  const quotaView = actualPawQuota
+    ? { rows: quotaRows, status: actualPawQuota.status, sourceAt: actualPawQuota.sourceAt, readAt: actualPawQuota.readAt }
+    : warmCache.resolve(quotaCacheKey(activeModel), modelQuotaSource, quotaRows, now);
 
   const forecastSrc = usage.sources['reset-forecast'];
   const resetMethodVal = forecastSrc?.resetMethod === 'banked' ? '发放重置卡'
@@ -354,7 +387,10 @@ async function publish() {
 
   const sourceDefs = [
     { id: 'session', title: '本会话', status: usage.sources.session?.status || 'ready', error: usage.sources.session?.error || null, rows: sessionRows, visible: true, canRefresh: false },
-    { id: 'official', title: '官方订阅', ...officialView, error: usage.sources.official?.error || null, visible: true, canRefresh: false },
+    ...(actualPawQuota ? [] : [{
+      id: 'official', title: subscriptionSource?.label || '官方订阅', ...officialView,
+      error: subscriptionSource?.error || null, visible: true, canRefresh: cpaQuota.enabled,
+    }]),
     { id: 'reset-forecast', title: '重置概率预测（仅供参考）', status: forecastSrc?.status || 'unavailable', error: forecastSrc?.error || null, rows: forecastRows, resetMethodText: `预告方式：${resetMethodVal}`, latestActivity, visible: Boolean(settings.showResetForecast) && forecastRows.length > 0, canRefresh: false },
     { id: 'model-quota', title: modelQuotaSource.label || '个人额度', ...quotaView, error: modelQuotaSource.error || null, visible: settings.showApiColumns !== false, canRefresh: true },
   ];
@@ -364,7 +400,7 @@ async function publish() {
     const avail = new Set(col.rows.map((r) => r.id));
     const chosenIds = new Set(selectedIdsForSource(col.id, avail));
     for (const row of col.rows) {
-      row.checked = chosenIds.has(row.id);
+      row.checked = row.selectable && chosenIds.has(row.id);
       if (row.checked) selectedMap.set(row.key, row);
     }
   }
@@ -391,10 +427,16 @@ async function publish() {
     at: now,
     pid: process.pid,
     threadId,
+    sessionBinding: binding,
+    sessionAnchorKey: anchorKey,
     model: activeModel,
     route: routeStatus,
     quotaStatus: quotaView.status,
     officialStatus: officialView.status,
+    ...(cpaQuota.enabled ? {
+      cpaQuotaOwner: freshAnchorOwner(now),
+      cpaQuotaColumn: actualPawQuota ? 'model-quota' : 'official',
+    } : {}),
     nextRefreshAt: usage.nextRefreshAt || null,
     settings: {
       minimalMode: Boolean(settings.minimalMode),
@@ -417,10 +459,13 @@ async function publish() {
 
 route.start();
 rate.start();
-rate.startWatching(() => {
-  const id = effectiveThreadId();
-  return id ? [id] : [];
-}, () => { dirty = true; });
+rate.startWatching(() => routeStatus.threadId ? [routeStatus.threadId] : [], (hint, threadId) => {
+  if (hint && hint.key === currentTitleHint()?.key) {
+    titleMatch = threadId ? { key: hint.key, threadId } : null;
+    updateTrackedSession();
+  }
+  dirty = true;
+}, 1000, currentTitleHint);
 usageClient.start().catch(() => {});
 
 let lastPublish = 0;
@@ -438,6 +483,7 @@ const tick = setInterval(async () => {
   }
   try { await fs.access(path.join(opts.stateDir, 'stop')); await stop(); return; } catch {}
   await handleCommands();
+  const previousTitleKey = currentTitleHint(now)?.key;
   try {
     const anchorPath = path.join(opts.stateDir, 'anchor.json');
     const stat = await fs.stat(anchorPath);
@@ -447,8 +493,15 @@ const tick = setInterval(async () => {
     }
   } catch {
     anchor = null;
+    anchorWriteTime = -1;
+  }
+  if (previousTitleKey !== currentTitleHint(now)?.key || (titleMatch && !currentTitleHint(now))) {
+    titleMatch = null;
+    updateTrackedSession();
+    dirty = true;
   }
   const freshAnchor = anchor && now - Number(anchor.at || 0) < 10000 && anchor.located;
+  if (cpaQuota.enabled) cpaQuota.refresh(cpaThreadForWindow(now), usageClient.refreshMs);
   if (freshAnchor && anchor.model) {
     if (anchor.model !== lastAnchorModel) {
       lastAnchorModel = anchor.model;
@@ -470,6 +523,7 @@ async function stop() {
   clearInterval(tick);
   route.stop();
   quota.stop();
+  cpaQuota.stop();
   await Promise.allSettled([rate.stop(), usageClient.stop(), settingsStore.flush()]);
   process.exit(0);
 }
