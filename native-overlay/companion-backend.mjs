@@ -111,6 +111,7 @@ const scriptsUrl = (name) => pathToFileURL(path.join(opts.runtimeDir, 'scripts',
 const { CombinedUsageClient } = await import(scriptsUrl('usage-client.mjs'));
 const { LiveRateClient, withLiveRate } = await import(scriptsUrl('live-rate.mjs'));
 const { ModelQuotaClient } = await import(scriptsUrl('model-quota.mjs'));
+const { CpaSessionQuotaClient } = await import(scriptsUrl('cpa-session-quota.mjs'));
 const { createUiSettingsStore, normalizeUiSettings } = await import(scriptsUrl('ui-settings.mjs'));
 
 const settingsStore = await createUiSettingsStore();
@@ -149,11 +150,13 @@ try {
 const codexCli = resolveRunnableCodexCli();
 const rate = new LiveRateClient();
 const quota = new ModelQuotaClient({ onUpdate: () => { dirty = true; } });
-await quota.initialize();
+const cpaQuota = new CpaSessionQuotaClient({ onUpdate: () => { dirty = true; } });
+await Promise.all([quota.initialize(), cpaQuota.initialize()]);
 
 const usageClient = new CombinedUsageClient({
   command: codexCli,
   refreshMs: settings.refreshEvery30Seconds ? 30000 : 60000,
+  readOfficialSubscription: !cpaQuota.enabled,
   onUpdate: (u) => { baseUsage = u; dirty = true; },
 });
 
@@ -175,6 +178,18 @@ const route = new IpcRoute((status) => {
     dirty = true;
   }
 });
+
+function freshAnchorOwner(now) {
+  return anchor?.located === true && Number.isSafeInteger(anchor.hwnd) && anchor.hwnd > 0
+    && Number.isSafeInteger(anchor.at) && anchor.at <= now && now - anchor.at < 10000
+    && (opts.parentPid <= 0 || anchor.pid === opts.parentPid) ? anchor.hwnd : null;
+}
+
+function cpaThreadForWindow(now) {
+  if (!freshAnchorOwner(now)) return null;
+  if (routeStatus.activeThreadId) return routeStatus.activeThreadId;
+  return selectSessionRoute(null, currentTitleHint(now), titleMatch).threadId;
+}
 
 function selectedIdsForSource(sourceId, availableIds) {
   const hasExplicit = Object.prototype.hasOwnProperty.call(settings.metrics || {}, sourceId);
@@ -224,7 +239,8 @@ function normalizeSourceMetrics(sourceId, source, now) {
     const compact = COMPACT_LABELS[m.id] ?? normalizedLabel;
     const minimalText = m.id === 'outputSpeed' ? value : value.replace(/\s+/g, ' ').trim();
     const normalText = m.id === 'outputSpeed' || !compact ? minimalText : `${compact} ${minimalText}`;
-    const selectable = sourceId !== 'model-quota' || m.id === 'remaining' || (settings.metrics?.['model-quota'] || []).includes(m.id);
+    const selectable = m.selectable !== false && (sourceId !== 'model-quota'
+      || m.id === 'remaining' || (settings.metrics?.['model-quota'] || []).includes(m.id));
     const resetHint = sourceId === 'official' && (m.id === 'primaryRemaining' || m.id === 'secondaryRemaining')
       ? formatResetShort(m.resetsAt)
       : null;
@@ -261,7 +277,8 @@ async function handleCommands() {
   if (cmd.type === 'refreshQuota') {
     const model = anchor && Date.now() - Number(anchor.at || 0) < 15000 ? anchor.model : null;
     if (model) quota.refresh(model, true).catch(() => {});
-    usageClient.official?.refresh?.().catch(() => {});
+    if (cpaQuota.enabled) cpaQuota.refresh(cpaThreadForWindow(Date.now()), usageClient.refreshMs, true);
+    else usageClient.official?.refresh?.().catch(() => {});
     dirty = true;
     return;
   }
@@ -342,11 +359,15 @@ async function publish() {
       selectable: true,
     });
   }
-  const officialRows = normalizeSourceMetrics('official', usage.sources.official, now);
+  const cpaSource = cpaQuota.enabled ? cpaQuota.source(cpaThreadForWindow(now), now) : null;
+  const subscriptionSource = cpaSource || usage.sources.official;
+  const officialRows = normalizeSourceMetrics('official', subscriptionSource, now);
   const forecastRows = normalizeSourceMetrics('reset-forecast', usage.sources['reset-forecast'], now);
   const quotaRows = normalizeSourceMetrics('model-quota', modelQuotaSource, now);
 
-  const officialView = warmCache.resolve('official', usage.sources.official, officialRows, now);
+  const officialView = cpaSource
+    ? { rows: officialRows, status: cpaSource.status, sourceAt: cpaSource.sourceAt, readAt: cpaSource.readAt }
+    : warmCache.resolve('official', subscriptionSource, officialRows, now);
   const quotaView = warmCache.resolve(quotaCacheKey(activeModel), modelQuotaSource, quotaRows, now);
 
   const forecastSrc = usage.sources['reset-forecast'];
@@ -361,7 +382,8 @@ async function publish() {
 
   const sourceDefs = [
     { id: 'session', title: '本会话', status: usage.sources.session?.status || 'ready', error: usage.sources.session?.error || null, rows: sessionRows, visible: true, canRefresh: false },
-    { id: 'official', title: '官方订阅', ...officialView, error: usage.sources.official?.error || null, visible: true, canRefresh: false },
+    { id: 'official', title: subscriptionSource?.label || '官方订阅', ...officialView,
+      error: subscriptionSource?.error || null, visible: true, canRefresh: cpaQuota.enabled },
     { id: 'reset-forecast', title: '重置概率预测（仅供参考）', status: forecastSrc?.status || 'unavailable', error: forecastSrc?.error || null, rows: forecastRows, resetMethodText: `预告方式：${resetMethodVal}`, latestActivity, visible: Boolean(settings.showResetForecast) && forecastRows.length > 0, canRefresh: false },
     { id: 'model-quota', title: modelQuotaSource.label || '个人额度', ...quotaView, error: modelQuotaSource.error || null, visible: settings.showApiColumns !== false, canRefresh: true },
   ];
@@ -371,7 +393,7 @@ async function publish() {
     const avail = new Set(col.rows.map((r) => r.id));
     const chosenIds = new Set(selectedIdsForSource(col.id, avail));
     for (const row of col.rows) {
-      row.checked = chosenIds.has(row.id);
+      row.checked = row.selectable && chosenIds.has(row.id);
       if (row.checked) selectedMap.set(row.key, row);
     }
   }
@@ -404,6 +426,7 @@ async function publish() {
     route: routeStatus,
     quotaStatus: quotaView.status,
     officialStatus: officialView.status,
+    ...(cpaQuota.enabled ? { cpaQuotaOwner: freshAnchorOwner(now) } : {}),
     nextRefreshAt: usage.nextRefreshAt || null,
     settings: {
       minimalMode: Boolean(settings.minimalMode),
@@ -468,6 +491,7 @@ const tick = setInterval(async () => {
     dirty = true;
   }
   const freshAnchor = anchor && now - Number(anchor.at || 0) < 10000 && anchor.located;
+  if (cpaQuota.enabled) cpaQuota.refresh(cpaThreadForWindow(now), usageClient.refreshMs);
   if (freshAnchor && anchor.model) {
     if (anchor.model !== lastAnchorModel) {
       lastAnchorModel = anchor.model;
@@ -489,6 +513,7 @@ async function stop() {
   clearInterval(tick);
   route.stop();
   quota.stop();
+  cpaQuota.stop();
   await Promise.allSettled([rate.stop(), usageClient.stop(), settingsStore.flush()]);
   process.exit(0);
 }

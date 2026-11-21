@@ -416,7 +416,7 @@ internal sealed class PopoverWindow : Window {
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(6, 0, 0, 0),
                     Cursor = Cursors.Hand,
-                    ToolTip = "立即重新读取个人额度与官方订阅状态"
+                    ToolTip = "立即重新读取额度"
                 };
                 var btnTxt = new TextBlock {
                     Text = isBusy ? "读取中…" : "重新读取",

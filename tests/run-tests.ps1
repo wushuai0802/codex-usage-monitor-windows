@@ -73,6 +73,11 @@ if ($LASTEXITCODE -ne 0) { throw 'Backend heartbeat verification tests failed.' 
 if ($LASTEXITCODE -ne 0) { throw 'Live rate and read-only bridge tests failed.' }
 & $node (Join-Path $root 'tests\model-quota.mjs')
 if ($LASTEXITCODE -ne 0) { throw 'Model-aware quota tests failed.' }
+& $node (Join-Path $root 'tests\cpa-session-quota.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'CPA session quota tests failed.' }
+$cpaPython = Get-Command python.exe -ErrorAction Stop
+& $cpaPython.Source -B (Join-Path $root 'tests\cpa-session-quota-reader.py')
+if ($LASTEXITCODE -ne 0) { throw 'CPA session quota reader tests failed.' }
 & $node (Join-Path $root 'tests\native-companion.mjs')
 if ($LASTEXITCODE -ne 0) { throw 'Native companion IPC route tests failed.' }
 & $node (Join-Path $root 'tests\source-cache.mjs')

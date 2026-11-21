@@ -431,7 +431,7 @@ internal sealed class CompanionController {
         }
 
         var windowKey = _anchor.ThreadTitleDigest == null ? null : _anchor.Owner.ToInt64() + ":" + _anchor.ThreadTitleDigest;
-        var displayMetrics = Json.MetricsForWindow(_metrics, windowKey);
+        var displayMetrics = Json.CpaQuotaForWindow(Json.MetricsForWindow(_metrics, windowKey), _anchor.Owner.ToInt64());
         var items = Json.Items(Json.Get(displayMetrics, "metrics")).Select(Json.Map).ToList();
         if (items.Count == 0) items.Add(new Dictionary<string, object> { { "key", "settings:open" }, { "value", "用量设置" }, { "label", "显示设置" } });
         var parts = items.Select(m => Json.Text(m, "value")).ToList();

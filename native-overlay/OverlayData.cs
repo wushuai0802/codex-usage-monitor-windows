@@ -43,7 +43,17 @@ internal static class Json {
             .Where(item => !Text(Map(item), "key").StartsWith("session:", StringComparison.Ordinal)).ToArray();
         shared["columns"] = Items(Get(snapshot, "columns"))
             .Where(column => Text(Map(column), "id") != "session").ToArray();
-        return shared;
+        return CpaQuotaForWindow(shared, 0);
+    }
+
+    internal static Dictionary<string, object> CpaQuotaForWindow(Dictionary<string, object> snapshot, long owner) {
+        if (!snapshot.ContainsKey("cpaQuotaOwner") || (owner > 0 && Text(snapshot, "cpaQuotaOwner") == owner.ToString())) return snapshot;
+        var scoped = new Dictionary<string, object>(snapshot);
+        scoped["metrics"] = Items(Get(snapshot, "metrics"))
+            .Where(item => !Text(Map(item), "key").StartsWith("official:", StringComparison.Ordinal)).ToArray();
+        scoped["columns"] = Items(Get(snapshot, "columns"))
+            .Where(column => Text(Map(column), "id") != "official").ToArray();
+        return scoped;
     }
     internal static Dictionary<string, object> Read(string path) { return new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 }.Deserialize<Dictionary<string, object>>(File.ReadAllText(path)); }
     internal static void Write(string path, object value) { var temp = path + "." + Process.GetCurrentProcess().Id + ".tmp"; File.WriteAllText(temp, new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 }.Serialize(value), new UTF8Encoding(false)); if (File.Exists(path)) File.Replace(temp, path, null); else File.Move(temp, path); }

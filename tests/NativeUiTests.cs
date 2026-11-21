@@ -41,6 +41,16 @@ internal static class NativeUiTests {
         var switched = Json.MetricsForWindow(data, "second");
         Check(Json.Items(Json.Get(switched, "metrics")).Count() == 1, "The new window cannot show another session's strip values.");
         Check(Json.Items(Json.Get(switched, "columns")).Count() == 3, "Shared quotas remain visible while the thread changes.");
+        Check(ReferenceEquals(data, Json.CpaQuotaForWindow(data, 99)), "Official desktop quota is independent of the active window.");
+        var scoped = new Dictionary<string, object>(data) { { "cpaQuotaOwner", 42 } };
+        scoped["metrics"] = Json.Items(Json.Get(data, "metrics"))
+            .Concat(new[] { new Dictionary<string, object> { { "key", "official:primaryRemaining" } } }).ToArray();
+        Check(ReferenceEquals(scoped, Json.CpaQuotaForWindow(scoped, 42)), "CPA quota stays visible for its own window.");
+        var switchedCpa = Json.CpaQuotaForWindow(scoped, 99);
+        Check(Json.Items(Json.Get(switchedCpa, "metrics")).Count() == keys.Length, "Another window cannot see CPA strip values.");
+        Check(Json.Items(Json.Get(switchedCpa, "columns")).All(c => Json.Text(Json.Map(c), "id") != "official"), "Another window cannot see the CPA column.");
+        Check(Json.Items(Json.Get(Json.MetricsForWindow(scoped, "second"), "metrics"))
+            .All(m => !Json.Text(Json.Map(m), "key").StartsWith("official:", StringComparison.Ordinal)), "Another title in the same window cannot see an old CPA quota.");
         foreach (double scale in new[] { 1.0, 1.5, 2.0 }) foreach (double width in new[] { 390.0, 650.0, 1120.0 }) foreach (bool light in new[] { true, false }) {
             var panel = new PopoverWindow();
             typeof(PopoverWindow).GetField("_settingsOpen", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(panel, true);
