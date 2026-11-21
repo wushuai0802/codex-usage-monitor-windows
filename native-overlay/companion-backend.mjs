@@ -110,8 +110,8 @@ await fs.mkdir(opts.stateDir, { recursive: true });
 const scriptsUrl = (name) => pathToFileURL(path.join(opts.runtimeDir, 'scripts', name)).href;
 const { CombinedUsageClient } = await import(scriptsUrl('usage-client.mjs'));
 const { LiveRateClient, withLiveRate } = await import(scriptsUrl('live-rate.mjs'));
-const { ModelQuotaClient } = await import(scriptsUrl('model-quota.mjs'));
-const { CpaSessionQuotaClient } = await import(scriptsUrl('cpa-session-quota.mjs'));
+const { ModelQuotaClient, sourceForModel } = await import(scriptsUrl('model-quota.mjs'));
+const { CpaSessionQuotaClient, pawModelQuota } = await import(scriptsUrl('cpa-session-quota.mjs'));
 const { createUiSettingsStore, normalizeUiSettings } = await import(scriptsUrl('ui-settings.mjs'));
 
 const settingsStore = await createUiSettingsStore();
@@ -241,7 +241,8 @@ function normalizeSourceMetrics(sourceId, source, now) {
     const normalText = m.id === 'outputSpeed' || !compact ? minimalText : `${compact} ${minimalText}`;
     const selectable = m.selectable !== false && (sourceId !== 'model-quota'
       || m.id === 'remaining' || (settings.metrics?.['model-quota'] || []).includes(m.id));
-    const resetHint = sourceId === 'official' && (m.id === 'primaryRemaining' || m.id === 'secondaryRemaining')
+    const resetHint = (sourceId === 'official' && (m.id === 'primaryRemaining' || m.id === 'secondaryRemaining'))
+      || (sourceId === 'model-quota' && m.id === 'remaining')
       ? formatResetShort(m.resetsAt)
       : null;
     out.push({
@@ -343,7 +344,9 @@ async function publish() {
   usage = withLiveRate(usage, rate.get(threadId), threadId, now);
 
   const activeModel = anchor && now - Number(anchor.at || 0) < 15000 ? anchor.model : null;
-  const modelQuotaSource = quota.get(activeModel);
+  const cpaSource = cpaQuota.enabled ? cpaQuota.source(cpaThreadForWindow(now), now) : null;
+  const actualPawQuota = sourceForModel(activeModel) === 'paw' ? pawModelQuota(cpaSource) : null;
+  const modelQuotaSource = actualPawQuota || quota.get(activeModel);
   usage.sources['model-quota'] = modelQuotaSource;
 
   const sessionRows = normalizeSourceMetrics('session', usage.sources.session, now);
@@ -359,7 +362,6 @@ async function publish() {
       selectable: true,
     });
   }
-  const cpaSource = cpaQuota.enabled ? cpaQuota.source(cpaThreadForWindow(now), now) : null;
   const subscriptionSource = cpaSource || usage.sources.official;
   const officialRows = normalizeSourceMetrics('official', subscriptionSource, now);
   const forecastRows = normalizeSourceMetrics('reset-forecast', usage.sources['reset-forecast'], now);
@@ -368,7 +370,10 @@ async function publish() {
   const officialView = cpaSource
     ? { rows: officialRows, status: cpaSource.status, sourceAt: cpaSource.sourceAt, readAt: cpaSource.readAt }
     : warmCache.resolve('official', subscriptionSource, officialRows, now);
-  const quotaView = warmCache.resolve(quotaCacheKey(activeModel), modelQuotaSource, quotaRows, now);
+  // The matched credential is session-specific. Keep it out of the shared model cache.
+  const quotaView = actualPawQuota
+    ? { rows: quotaRows, status: actualPawQuota.status, sourceAt: actualPawQuota.sourceAt, readAt: actualPawQuota.readAt }
+    : warmCache.resolve(quotaCacheKey(activeModel), modelQuotaSource, quotaRows, now);
 
   const forecastSrc = usage.sources['reset-forecast'];
   const resetMethodVal = forecastSrc?.resetMethod === 'banked' ? '发放重置卡'
@@ -382,8 +387,10 @@ async function publish() {
 
   const sourceDefs = [
     { id: 'session', title: '本会话', status: usage.sources.session?.status || 'ready', error: usage.sources.session?.error || null, rows: sessionRows, visible: true, canRefresh: false },
-    { id: 'official', title: subscriptionSource?.label || '官方订阅', ...officialView,
-      error: subscriptionSource?.error || null, visible: true, canRefresh: cpaQuota.enabled },
+    ...(actualPawQuota ? [] : [{
+      id: 'official', title: subscriptionSource?.label || '官方订阅', ...officialView,
+      error: subscriptionSource?.error || null, visible: true, canRefresh: cpaQuota.enabled,
+    }]),
     { id: 'reset-forecast', title: '重置概率预测（仅供参考）', status: forecastSrc?.status || 'unavailable', error: forecastSrc?.error || null, rows: forecastRows, resetMethodText: `预告方式：${resetMethodVal}`, latestActivity, visible: Boolean(settings.showResetForecast) && forecastRows.length > 0, canRefresh: false },
     { id: 'model-quota', title: modelQuotaSource.label || '个人额度', ...quotaView, error: modelQuotaSource.error || null, visible: settings.showApiColumns !== false, canRefresh: true },
   ];
@@ -426,7 +433,10 @@ async function publish() {
     route: routeStatus,
     quotaStatus: quotaView.status,
     officialStatus: officialView.status,
-    ...(cpaQuota.enabled ? { cpaQuotaOwner: freshAnchorOwner(now) } : {}),
+    ...(cpaQuota.enabled ? {
+      cpaQuotaOwner: freshAnchorOwner(now),
+      cpaQuotaColumn: actualPawQuota ? 'model-quota' : 'official',
+    } : {}),
     nextRefreshAt: usage.nextRefreshAt || null,
     settings: {
       minimalMode: Boolean(settings.minimalMode),

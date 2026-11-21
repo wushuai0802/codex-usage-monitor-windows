@@ -48,11 +48,12 @@ internal static class Json {
 
     internal static Dictionary<string, object> CpaQuotaForWindow(Dictionary<string, object> snapshot, long owner) {
         if (!snapshot.ContainsKey("cpaQuotaOwner") || (owner > 0 && Text(snapshot, "cpaQuotaOwner") == owner.ToString())) return snapshot;
+        string column = Text(snapshot, "cpaQuotaColumn") == "model-quota" ? "model-quota" : "official";
         var scoped = new Dictionary<string, object>(snapshot);
         scoped["metrics"] = Items(Get(snapshot, "metrics"))
-            .Where(item => !Text(Map(item), "key").StartsWith("official:", StringComparison.Ordinal)).ToArray();
+            .Where(item => !Text(Map(item), "key").StartsWith(column + ":", StringComparison.Ordinal)).ToArray();
         scoped["columns"] = Items(Get(snapshot, "columns"))
-            .Where(column => Text(Map(column), "id") != "official").ToArray();
+            .Where(item => Text(Map(item), "id") != column).ToArray();
         return scoped;
     }
     internal static Dictionary<string, object> Read(string path) { return new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 }.Deserialize<Dictionary<string, object>>(File.ReadAllText(path)); }

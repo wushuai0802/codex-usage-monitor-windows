@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { CpaSessionQuotaClient } from '../scripts/cpa-session-quota.mjs';
+import { CpaSessionQuotaClient, pawModelQuota } from '../scripts/cpa-session-quota.mjs';
 
 const A = '00000000-0000-4000-8000-000000000001';
 const B = '00000000-0000-4000-8000-000000000002';
@@ -39,6 +39,7 @@ try {
   ]));
   await first;
   assert.equal(client.source(A).status, 'ready');
+  assert.equal(pawModelQuota(client.source(A)), null, 'Direct Codex keeps its 5h and 7d metrics.');
   assert.deepEqual(metrics(A), ['0%', '76%', 'AAAAAAAA']);
   assert.equal(client.source(A).metrics.at(-1).selectable, false);
   assert.equal(client.refresh(A, 60000), undefined);
@@ -66,6 +67,14 @@ try {
   await paw;
   assert.equal(client.source(B).label, 'CPA 实际账号 · Paw');
   assert.deepEqual(metrics(B), ['--', '25.50 USD', 'CCCCCCCC']);
+  const sharedPawColumn = pawModelQuota(client.source(B));
+  assert.equal(sharedPawColumn.label, '个人额度 · Paw');
+  assert.equal(sharedPawColumn.metrics[0].label, 'Paw剩余');
+  assert.equal(sharedPawColumn.metrics[0].resetsAt, (now + 3600000) / 1000);
+  assert.deepEqual(sharedPawColumn.metrics.map(({ id, value }) => [id, value]), [
+    ['remaining', '25.50 USD'], ['cpaAccount', 'CCCCCCCC'],
+  ], 'The actual Paw reading fits the existing personal quota metric and omits fixed-window placeholders.');
+  assert.equal(pawModelQuota(client.source(A)), null, 'The merged Paw reading is scoped to the matching session.');
 
   now += 3000;
   const failure = client.refresh(B, 60000, true);
@@ -73,6 +82,7 @@ try {
   pending.get(B).reject(new Error('fixture'));
   await failure;
   assert.equal(client.source(B).status, 'unavailable');
+  assert.equal(pawModelQuota(client.source(B)), null, 'A failed lookup cannot claim a Paw route.');
   assert.deepEqual(metrics(B), ['--', '--']);
 
   client.refresh(null, 60000);

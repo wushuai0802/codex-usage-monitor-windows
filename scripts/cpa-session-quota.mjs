@@ -17,6 +17,21 @@ const UNAVAILABLE = {
   'invalid-config': 'CPA 额度读取器配置无效。',
 };
 
+export function pawModelQuota(cpaSource) {
+  if (cpaSource?.provider !== 'paw') return null;
+  const weekly = cpaSource.metrics.find(metric => metric.id === 'secondaryRemaining');
+  if (!weekly) return null;
+  const credential = cpaSource.metrics.find(metric => metric.id === 'cpaAccount');
+  return {
+    ...cpaSource,
+    label: '个人额度 · Paw',
+    metrics: [
+      { ...weekly, id: 'remaining', label: 'Paw剩余' },
+      ...(credential ? [credential] : []),
+    ],
+  };
+}
+
 function readOverSsh(config, sessionId, signal) {
   return new Promise((resolve, reject) => {
     const ssh = process.env.CODEX_USAGE_SSH_PATH
@@ -137,6 +152,7 @@ export class CpaSessionQuotaClient {
     });
     const hasQuota = metrics.some((metric) => metric.resetsAt);
     return { label: paw ? 'CPA 实际账号 · Paw' : 'CPA 实际账号', metrics,
+      provider: matched ? reply.provider : null,
       status: hasQuota ? 'ready' : error || matched ? 'unavailable' : 'loading',
       error: error || (matched && !hasQuota ? '当前账号暂无可核实的额度窗口。' : null),
       sourceAt: hasQuota ? reply.observedAt : null,

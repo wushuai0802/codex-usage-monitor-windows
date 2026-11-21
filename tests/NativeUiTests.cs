@@ -4,10 +4,19 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 using System.Web.Script.Serialization;
 
 internal static class NativeUiTests {
     private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
+    private static IEnumerable<string> Labels(DependencyObject node) {
+        var label = node as TextBlock;
+        if (label != null) yield return label.Text;
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++) {
+            foreach (string text in Labels(VisualTreeHelper.GetChild(node, i))) yield return text;
+        }
+    }
     [STAThread]
     public static void Main(string[] args) {
         var keys = new[] { "session:outputSpeed", "session:currentTaskTokens", "session:cacheHitRate", "model-quota:remaining" };
@@ -51,6 +60,22 @@ internal static class NativeUiTests {
         Check(Json.Items(Json.Get(switchedCpa, "columns")).All(c => Json.Text(Json.Map(c), "id") != "official"), "Another window cannot see the CPA column.");
         Check(Json.Items(Json.Get(Json.MetricsForWindow(scoped, "second"), "metrics"))
             .All(m => !Json.Text(Json.Map(m), "key").StartsWith("official:", StringComparison.Ordinal)), "Another title in the same window cannot see an old CPA quota.");
+        var paw = new Dictionary<string, object>(data) { { "cpaQuotaOwner", 42 }, { "cpaQuotaColumn", "model-quota" } };
+        paw["columns"] = Json.Items(Json.Get(data, "columns")).Where(c => Json.Text(Json.Map(c), "id") != "official").ToArray();
+        var switchedPaw = Json.CpaQuotaForWindow(paw, 99);
+        Check(Json.Items(Json.Get(switchedPaw, "metrics")).Count() == keys.Length - 1,
+            "A Paw quota merged into the personal column remains scoped to its session.");
+        Check(Json.Items(Json.Get(switchedPaw, "columns")).All(c => Json.Text(Json.Map(c), "id") != "model-quota"),
+            "Switching windows removes the previous session's merged Paw column.");
+        var pawPanel = new PopoverWindow();
+        typeof(PopoverWindow).GetField("_settingsOpen", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(pawPanel, true);
+        var pawSize = pawPanel.Bind(paw, 1, true, 960, 600);
+        pawPanel.OuterVisual.Arrange(new Rect(0, 0, pawSize.Width, pawSize.Height));
+        pawPanel.OuterVisual.UpdateLayout();
+        var pawLabels = Labels(pawPanel.OuterVisual).ToArray();
+        Check(pawLabels.Count(label => label == "设置") == 1 && pawLabels.Contains("个人额度栏"),
+            "Hiding the duplicate subscription column leaves settings accessible.");
+        pawPanel.Close();
         foreach (double scale in new[] { 1.0, 1.5, 2.0 }) foreach (double width in new[] { 390.0, 650.0, 1120.0 }) foreach (bool light in new[] { true, false }) {
             var panel = new PopoverWindow();
             typeof(PopoverWindow).GetField("_settingsOpen", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(panel, true);
