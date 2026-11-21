@@ -3,6 +3,23 @@ import net from 'node:net';
 import crypto from 'node:crypto';
 
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+const TITLE_DIGEST_RE = /^[a-f0-9]{64}$/;
+
+export function windowTitleHint(anchor, overlayPid, now = Date.now()) {
+  if (anchor?.located !== true || !Number.isSafeInteger(anchor.hwnd) || anchor.hwnd <= 0
+      || !Number.isSafeInteger(anchor.at) || anchor.at > now || now - anchor.at >= 10000
+      || (overlayPid > 0 && anchor.pid !== overlayPid)
+      || typeof anchor.titleDigest !== 'string' || !TITLE_DIGEST_RE.test(anchor.titleDigest)) return null;
+  return { key: `${anchor.hwnd}:${anchor.titleDigest}`, titleDigest: anchor.titleDigest };
+}
+
+export function selectSessionRoute(ipcThreadId, hint, titleMatch) {
+  if (ipcThreadId) return { threadId: ipcThreadId, binding: 'ipc', anchorKey: null };
+  if (hint && hint.key === titleMatch?.key && UUID_RE.test(titleMatch.threadId || '')) {
+    return { threadId: titleMatch.threadId, binding: 'window-title', anchorKey: hint.key };
+  }
+  return { threadId: null, binding: 'unavailable', anchorKey: null };
+}
 
 export class RouteState {
   constructor() {

@@ -35,6 +35,12 @@ internal static class NativeUiTests {
             metrics = keys.Select(key => new { key, label = key, value = "42" }).ToArray(),
             settings = new { theme = "auto", minimalMode = true, metricPriority = keys } });
         var data = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(payload);
+        data["sessionBinding"] = "window-title";
+        data["sessionAnchorKey"] = "first";
+        Check(ReferenceEquals(data, Json.MetricsForWindow(data, "first")), "Matching window retains the session snapshot.");
+        var switched = Json.MetricsForWindow(data, "second");
+        Check(Json.Items(Json.Get(switched, "metrics")).Count() == 1, "The new window cannot show another session's strip values.");
+        Check(Json.Items(Json.Get(switched, "columns")).Count() == 3, "Shared quotas remain visible while the thread changes.");
         foreach (double scale in new[] { 1.0, 1.5, 2.0 }) foreach (double width in new[] { 390.0, 650.0, 1120.0 }) foreach (bool light in new[] { true, false }) {
             var panel = new PopoverWindow();
             typeof(PopoverWindow).GetField("_settingsOpen", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(panel, true);

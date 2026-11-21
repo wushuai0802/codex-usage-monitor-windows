@@ -7,16 +7,24 @@ import time
 from rate_metrics import MetricsCollector
 
 UUID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',re.I)
+TITLE_DIGEST = re.compile(r'^[0-9a-f]{64}$')
 collector = MetricsCollector()
 for line in sys.stdin:
     result = []
     request_id = None
+    resolved_thread_id = None
     try:
         request = json.loads(line) if len(line) <= 4096 else []
         request_id = request.get('requestId') if isinstance(request,dict) else None
         selected = request.get('threadIds',[]) if isinstance(request,dict) else request
         if not isinstance(selected,list):
             selected = []
+        title_digest = request.get('titleDigest') if isinstance(request, dict) else None
+        if not selected and isinstance(title_digest, str) and TITLE_DIGEST.fullmatch(title_digest):
+            resolved = collector.resolve_title_digest(title_digest)
+            if isinstance(resolved, str) and UUID.fullmatch(resolved):
+                resolved_thread_id = resolved.lower()
+                selected = [resolved_thread_id]
         watched = {thread for thread in selected[:16] if isinstance(thread,str) and UUID.fullmatch(thread)}
         if watched != collector.selected:
             collector.selected = watched
@@ -32,4 +40,6 @@ for line in sys.stdin:
     except (OSError,ValueError,TypeError):
         pass
     response = {'requestId':request_id,'readings':result} if request_id is not None else result
+    if request_id is not None and resolved_thread_id is not None:
+        response['resolvedThreadId'] = resolved_thread_id
     print(json.dumps(response,separators=(',',':'),allow_nan=False),flush=True)

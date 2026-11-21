@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TITLE_DIGEST = /^[0-9a-f]{64}$/;
 
 export function withLiveRate(usage, reading, threadId, now = Date.now()) {
   if (!usage) return usage;
@@ -52,44 +53,56 @@ export class LiveRateClient {
     this.child=child;child.stdin.on('error',()=>{});
     const finish = () => {
       if(this.child!==child)return;
-      this.pending?.finish([]);this.child=null;this.retryAt=Date.now()+5000;
+      this.pending?.finish(null);this.child=null;this.retryAt=Date.now()+5000;
     };
     child.on('error',finish);child.on('exit',finish);
     createInterface({input:child.stdout}).on('line',line=>{
-      if(line.length>65536){this.pending?.finish([]);return;}
+      if(line.length>65536){this.pending?.finish(null);return;}
       try{
         const value=JSON.parse(line);
-        if(value?.requestId===this.pending?.id)this.pending.finish(Array.isArray(value.readings)?value.readings:[]);
-      }catch{this.pending?.finish([]);}
+        if(this.pending && value?.requestId===this.pending.id)this.pending.finish(value);
+      }catch{this.pending?.finish(null);}
     });
   }
-  async sample(threadIds) {
+  async sample(threadIds, requestedTitleDigest = null) {
     const ids=[...new Set(threadIds.filter(id=>typeof id==='string'&&UUID.test(id)))].slice(0,16);
-    if(!ids.length){this.readings.clear();return;}
+    const titleDigest = !ids.length && typeof requestedTitleDigest === 'string' && TITLE_DIGEST.test(requestedTitleDigest)
+      ? requestedTitleDigest : null;
+    if(!ids.length && !titleDigest){this.readings.clear();return null;}
     if(!this.child&&!this.stopped&&Date.now()>=this.retryAt)this.start();
-    if(!this.child||this.child.exitCode!==null||this.pending)return;
-    const values=await new Promise(resolve=>{
+    if(!this.child||this.child.exitCode!==null||this.pending)return null;
+    const response=await new Promise(resolve=>{
       let timer;
       const request={id:++this.sequence,finish:value=>{clearTimeout(timer);if(this.pending===request)this.pending=null;resolve(value);}};
-      this.pending=request;timer=setTimeout(()=>request.finish([]),this.timeoutMs);
-      this.child.stdin.write(JSON.stringify({requestId:request.id,threadIds:ids})+'\n',error=>{if(error)request.finish([]);});
+      this.pending=request;timer=setTimeout(()=>request.finish(null),this.timeoutMs);
+      this.child.stdin.write(JSON.stringify({requestId:request.id,threadIds:ids,titleDigest})+'\n',error=>{if(error)request.finish(null);});
     });
-    const next=new Map([...this.readings].filter(([id])=>ids.includes(id)));
-    for(const value of values)if(value&&ids.includes(value.threadId))next.set(value.threadId,value);
+    const resolved = titleDigest && typeof response?.resolvedThreadId === 'string' && UUID.test(response.resolvedThreadId)
+      ? response.resolvedThreadId.toLowerCase() : null;
+    const watched = resolved ? [resolved] : ids;
+    const next=new Map([...this.readings].filter(([id])=>watched.includes(id)));
+    for(const value of Array.isArray(response?.readings) ? response.readings : []) {
+      if(value && watched.includes(value.threadId)) next.set(value.threadId,value);
+    }
     this.readings=next;
+    return resolved;
   }
   get(threadId) { return this.readings.get(threadId); }
-  startWatching(getThreadIds,onUpdate,intervalMs=1000) {
+  startWatching(getThreadIds,onUpdate,intervalMs=1000,getTitleHint=()=>null) {
     if(this.watchTimer)return;
     const poll=async()=>{
       if(this.stopped)return;
-      try{await this.sample(getThreadIds());if(!this.stopped)onUpdate?.();}catch{}
+      try {
+        const hint = getTitleHint();
+        const resolved = await this.sample(getThreadIds(), hint?.titleDigest);
+        if(!this.stopped)onUpdate?.(hint, resolved);
+      } catch {}
       finally{if(!this.stopped)this.watchTimer=setTimeout(poll,intervalMs);}
     };
     this.watchTimer=setTimeout(poll,0);
   }
   async stop() {
-    this.stopped=true;this.pending?.finish([]);this.pending=null;
+    this.stopped=true;this.pending?.finish(null);this.pending=null;
     clearTimeout(this.watchTimer);this.watchTimer=null;
     if (!this.child) return;
     const child=this.child;

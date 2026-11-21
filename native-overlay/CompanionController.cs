@@ -306,10 +306,14 @@ internal sealed class CompanionController {
         }
         _anchor = a;
         var now = Json.Now();
-        var signature = _owner.ToInt64() + ":" + (a == null ? "hidden" : a.ModelId);
+        var signature = _owner.ToInt64() + ":" + (a == null ? "hidden" : a.ModelId + ":" + a.ThreadTitleDigest);
         if (signature != _anchorSignature || now - _lastAnchorWrite >= 2500) {
             try {
-                Json.Write(System.IO.Path.Combine(_state, "anchor.json"), new { at = now, pid = Process.GetCurrentProcess().Id, hwnd = _owner.ToInt64(), model = a == null ? null : a.ModelId, located = a != null, probeMs = elapsed });
+                Json.Write(System.IO.Path.Combine(_state, "anchor.json"), new {
+                    at = now, pid = Process.GetCurrentProcess().Id, hwnd = _owner.ToInt64(),
+                    model = a == null ? null : a.ModelId, titleDigest = a == null ? null : a.ThreadTitleDigest,
+                    located = a != null, probeMs = elapsed
+                });
                 _anchorSignature = signature; _lastAnchorWrite = now;
             } catch { }
         }
@@ -426,7 +430,9 @@ internal sealed class CompanionController {
             _hasBgSample = true; _nextBgSample = now + 2500;
         }
 
-        var items = Json.Items(Json.Get(_metrics, "metrics")).Select(Json.Map).ToList();
+        var windowKey = _anchor.ThreadTitleDigest == null ? null : _anchor.Owner.ToInt64() + ":" + _anchor.ThreadTitleDigest;
+        var displayMetrics = Json.MetricsForWindow(_metrics, windowKey);
+        var items = Json.Items(Json.Get(displayMetrics, "metrics")).Select(Json.Map).ToList();
         if (items.Count == 0) items.Add(new Dictionary<string, object> { { "key", "settings:open" }, { "value", "用量设置" }, { "label", "显示设置" } });
         var parts = items.Select(m => Json.Text(m, "value")).ToList();
         int availablePx = _anchor.Right - _anchor.Left;
@@ -496,7 +502,7 @@ internal sealed class CompanionController {
             int top = Math.Max(_frame.Top, work.Top) + 8, bottom = Math.Min(_frame.Bottom, work.Bottom) - 8;
             int gap = (int)Math.Round(6 * scale);
             int above = bounds.Top - top - gap, below = bottom - bounds.Bottom - gap;
-            var popDip = _popover.Bind(_metrics, scale, _cachedLight, Math.Max(120, (right - left) / scale), Math.Max(80, Math.Max(above, below) / scale));
+            var popDip = _popover.Bind(displayMetrics, scale, _cachedLight, Math.Max(120, (right - left) / scale), Math.Max(80, Math.Max(above, below) / scale));
             int popW = (int)Math.Ceiling(popDip.Width * scale);
             int popH = (int)Math.Ceiling(popDip.Height * scale);
             int px = Math.Max(left, Math.Min(bounds.Right - popW, right - popW));

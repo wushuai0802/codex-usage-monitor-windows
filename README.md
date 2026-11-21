@@ -24,6 +24,8 @@ tok/s 来自本地 Codex usage 事件。生成中可能使用估算或暂存读�
 
 这是非官方的伴随界面工具，不是 OpenAI 官方插件。默认伴随浮层模式通过只读 `\\.\pipe\codex-ipc` 与 Windows UI Automation 跟随窗口（兼容旧版 `-Mode LegacyCdp` 仍仅绑定本机 **127.0.0.1**），不修改 WindowsApps 或 app.asar，不关闭 workspace trust，也不强制结束 Codex。
 
+旧 IPC 管道不可用时，原生模式用当前聊天工具栏标题的摘要匹配本地会话。标题无法唯一匹配时，本会话指标显示为暂无数据，订阅与供应商额度仍可独立显示。
+
 ## 安装
 
 在 [Releases](https://github.com/wushuai0802/codex-usage-monitor-windows/releases) 下载 ZIP 与同名 SHA-256 文件，核对后解压：

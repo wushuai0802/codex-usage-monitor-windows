@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { IpcRoute } from './ipc-route.mjs';
+import { IpcRoute, selectSessionRoute, windowTitleHint } from './ipc-route.mjs';
 import { SourceCache, quotaCacheKey, retentionOrder, moveRetention } from './source-cache.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -135,6 +135,7 @@ let stopped = false;
 let routeStatus = { connected: false, threadId: null, activeThreadId: null, routeCount: 0 };
 let baseUsage = null;
 let anchor = null;
+let titleMatch = null;
 let dirty = true;
 let lastHandledCmdSeq = 0;
 let publishedMetricKeys = [];
@@ -156,15 +157,21 @@ const usageClient = new CombinedUsageClient({
   onUpdate: (u) => { baseUsage = u; dirty = true; },
 });
 
-function effectiveThreadId() {
-  return routeStatus.threadId || baseUsage?.currentThreadId || null;
+function currentTitleHint(now = Date.now()) {
+  return routeStatus.threadId ? null : windowTitleHint(anchor, opts.parentPid, now);
+}
+
+function updateTrackedSession() {
+  const { threadId } = selectSessionRoute(routeStatus.threadId, currentTitleHint(), titleMatch);
+  if (usageClient.setVisibleThreadIds(threadId ? [threadId] : [])) dirty = true;
 }
 
 const route = new IpcRoute((status) => {
   const prev = routeStatus.threadId;
   routeStatus = status;
   if (status.threadId !== prev) {
-    usageClient.setVisibleThreadIds(status.threadId ? [status.threadId] : []);
+    titleMatch = null;
+    updateTrackedSession();
     dirty = true;
   }
 });
@@ -312,7 +319,7 @@ async function writeAtomicJson(targetPath, payload) {
 
 async function publish() {
   const now = Date.now();
-  const threadId = effectiveThreadId();
+  const { threadId, binding, anchorKey } = selectSessionRoute(routeStatus.threadId, currentTitleHint(now), titleMatch);
   let usage = baseUsage
     ? usageClient.usageForThread(baseUsage, threadId, now)
     : { sources: { session: { id: 'session', label: '本会话', status: 'loading', metrics: [] }, official: { id: 'official', label: '官方订阅', status: 'loading', metrics: [] } }, nextRefreshAt: null };
@@ -391,6 +398,8 @@ async function publish() {
     at: now,
     pid: process.pid,
     threadId,
+    sessionBinding: binding,
+    sessionAnchorKey: anchorKey,
     model: activeModel,
     route: routeStatus,
     quotaStatus: quotaView.status,
@@ -417,10 +426,13 @@ async function publish() {
 
 route.start();
 rate.start();
-rate.startWatching(() => {
-  const id = effectiveThreadId();
-  return id ? [id] : [];
-}, () => { dirty = true; });
+rate.startWatching(() => routeStatus.threadId ? [routeStatus.threadId] : [], (hint, threadId) => {
+  if (hint && hint.key === currentTitleHint()?.key) {
+    titleMatch = threadId ? { key: hint.key, threadId } : null;
+    updateTrackedSession();
+  }
+  dirty = true;
+}, 1000, currentTitleHint);
 usageClient.start().catch(() => {});
 
 let lastPublish = 0;
@@ -438,6 +450,7 @@ const tick = setInterval(async () => {
   }
   try { await fs.access(path.join(opts.stateDir, 'stop')); await stop(); return; } catch {}
   await handleCommands();
+  const previousTitleKey = currentTitleHint(now)?.key;
   try {
     const anchorPath = path.join(opts.stateDir, 'anchor.json');
     const stat = await fs.stat(anchorPath);
@@ -447,6 +460,12 @@ const tick = setInterval(async () => {
     }
   } catch {
     anchor = null;
+    anchorWriteTime = -1;
+  }
+  if (previousTitleKey !== currentTitleHint(now)?.key || (titleMatch && !currentTitleHint(now))) {
+    titleMatch = null;
+    updateTrackedSession();
+    dirty = true;
   }
   const freshAnchor = anchor && now - Number(anchor.at || 0) < 10000 && anchor.located;
   if (freshAnchor && anchor.model) {
